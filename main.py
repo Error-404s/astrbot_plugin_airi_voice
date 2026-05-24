@@ -395,6 +395,25 @@ class AiriVoice(Star):
                 return candidate
         return ellipsis
 
+    def _wrap_text_lines(self, draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> List[str]:
+        lines: List[str] = []
+        for paragraph in text.splitlines() or [""]:
+            if not paragraph:
+                lines.append("")
+                continue
+            current = ""
+            for char in paragraph:
+                candidate = current + char
+                if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+                    current = candidate
+                else:
+                    if current:
+                        lines.append(current)
+                    current = char
+            if current:
+                lines.append(current)
+        return lines
+
     def _fill_vertical_gradient(self, img: Image.Image, top_color, bottom_color) -> None:
         width, height = img.size
         draw = ImageDraw.Draw(img)
@@ -527,6 +546,169 @@ class AiriVoice(Star):
         img.save(save_path)
         return save_path
 
+    def _create_help_image(self, is_admin: bool) -> Path:
+        width = IMAGE_WIDTH
+        padding_x = 48
+        card_x = 48
+        card_width = width - padding_x * 2
+        top_y = 176
+        gap_y = 18
+
+        title_font = self._load_image_font(40, bold=True)
+        subtitle_font = self._load_image_font(20)
+        section_title_font = self._load_image_font(25, bold=True)
+        body_font = self._load_image_font(20)
+        footer_font = self._load_image_font(18)
+
+        commands = [
+            "📋 /voice.list [页码] - 查看可用语音列表",
+            "🎲 随机语音 或 随机发条语音 - 随机发送一条语音",
+            "🎲 随机 关键词 - 在包含关键词的语音中随机发送",
+            "❓ /voice.help - 显示此帮助",
+        ]
+        admin_commands = [
+            "➕ /voice.add 名字 - 引用语音消息添加新语音",
+            "🗑️ /voice.delete 名字 - 删除通过 .add 添加的语音",
+            "🔄 /voice.reload - 重新加载语音列表",
+            "🔐 /voice.check - 查看当前用户权限",
+        ] if is_admin else []
+
+        sections = [
+            (
+                "快速说明",
+                [
+                    "直接输入语音关键词即可发送对应语音。",
+                    "支持本地 voices/、网页上传、/voice.add 三种添加方式。",
+                ],
+                (244, 114, 182),
+            ),
+            (
+                "触发模式",
+                [
+                    "direct（默认）：直接输入关键词触发。",
+                    "prefix：需使用 #voice 关键词 触发。",
+                    "llm：由大模型通过工具调用。",
+                ],
+                (96, 165, 250),
+            ),
+            (
+                "可用命令",
+                commands,
+                (45, 212, 191),
+            ),
+        ]
+
+        if admin_commands:
+            sections.append(("管理员命令", admin_commands, (168, 85, 247)))
+
+        sections.append(
+            (
+                "图片列表提示",
+                [
+                    "可在插件配置中开启 list_as_image，让 /voice.list 以图片形式展示。",
+                    "分页可直接输入 /voice.list 2、/voice.list 3 继续翻页。",
+                ],
+                (251, 191, 36),
+            )
+        )
+
+        temp_img = Image.new("RGBA", (width, 1200), IMAGE_BG_COLOR_TOP)
+        temp_draw = ImageDraw.Draw(temp_img)
+
+        card_line_height = 30
+        section_title_height = 32
+        body_gap = 10
+        card_padding_y = 24
+
+        card_heights: List[int] = []
+        wrapped_sections: List[List[str]] = []
+        for _, items, _ in sections:
+            wrapped_lines: List[str] = []
+            for item in items:
+                wrapped_lines.extend(self._wrap_text_lines(temp_draw, item, body_font, card_width - 52))
+            wrapped_sections.append(wrapped_lines)
+            card_height = card_padding_y * 2 + section_title_height + 14 + len(wrapped_lines) * card_line_height + max(0, len(wrapped_lines) - 1) * 2
+            card_heights.append(card_height)
+
+        header_height = 156
+        footer_height = 84
+        gap_between_cards = gap_y
+        height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
+
+        img = Image.new("RGBA", (width, height), IMAGE_BG_COLOR_TOP)
+        self._fill_vertical_gradient(img, IMAGE_BG_COLOR_TOP, IMAGE_BG_COLOR_BOTTOM)
+        draw = ImageDraw.Draw(img)
+
+        draw.ellipse((-110, -120, 370, 360), fill=(244, 114, 182, 18))
+        draw.ellipse((width - 360, 8, width + 100, 460), fill=(45, 212, 191, 16))
+        draw.ellipse((width * 0.30, -130, width * 0.64, 140), fill=(168, 85, 247, 9))
+        draw.ellipse((width * 0.72, 18, width * 0.90, 138), fill=(96, 165, 250, 10))
+
+        header_box = (34, 24, width - 34, 146)
+        shadow_box = (header_box[0] + 4, header_box[1] + 6, header_box[2] + 4, header_box[3] + 6)
+        draw.rounded_rectangle(shadow_box, radius=36, fill=(244, 114, 182, 14))
+        draw.rounded_rectangle(header_box, radius=36, fill=(255, 255, 255, 250), outline=(232, 240, 248, 255), width=2)
+
+        draw.text((70, 42), "AiriVoice 使用帮助", font=title_font, fill=(30, 41, 59))
+        draw.text((70, 94), "一张图快速看懂如何使用、分页和管理语音", font=subtitle_font, fill=(106, 122, 147))
+
+        pill_y = 50
+        pills = [
+            ("状态", "语音插件已就绪", (255, 236, 244), (236, 72, 153)),
+            ("模式", self.trigger_mode, (236, 250, 255), (14, 165, 233)),
+        ]
+        pill_x = width - 392
+        for label, value, pill_bg, pill_fg in pills:
+            pill_width = 150 if label == "状态" else 160
+            draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_width, pill_y + 48), radius=24, fill=pill_bg)
+            draw.text((pill_x + 16, pill_y + 10), label, font=subtitle_font, fill=(101, 116, 139))
+            value_box = draw.textbbox((0, 0), value, font=self._load_image_font(20, bold=True))
+            value_width = value_box[2] - value_box[0]
+            draw.text((pill_x + pill_width - value_width - 16, pill_y + 8), value, font=self._load_image_font(20, bold=True), fill=pill_fg)
+            pill_x += pill_width + 14
+
+        section_y = top_y
+        section_bg_colors = [
+            (255, 255, 255, 252),
+            (255, 255, 255, 252),
+            (255, 255, 255, 252),
+            (255, 255, 255, 252),
+            (255, 255, 255, 252),
+        ]
+
+        for index, ((section_title, _, accent), wrapped_lines, card_height, card_bg) in enumerate(zip(sections, wrapped_sections, card_heights, section_bg_colors)):
+            y1 = section_y
+            y2 = y1 + card_height
+
+            draw.rounded_rectangle((card_x + 3, y1 + 5, card_x + card_width + 3, y2 + 5), radius=30, fill=(244, 114, 182, 12))
+            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=30, fill=card_bg, outline=(231, 237, 245, 255), width=2)
+            draw.rounded_rectangle((card_x, y1, card_x + 8, y2), radius=8, fill=accent)
+
+            icon_box = (card_x + 22, y1 + 22, card_x + 58, y1 + 58)
+            draw.ellipse(icon_box, fill=(accent[0], accent[1], accent[2], 24), outline=accent, width=2)
+            draw.text((card_x + 70, y1 + 20), section_title, font=section_title_font, fill=(30, 41, 59))
+
+            text_y = y1 + 64
+            bullet_color = (106, 122, 147)
+            for line in wrapped_lines:
+                if not line:
+                    text_y += 8
+                    continue
+                draw.text((card_x + 70, text_y), "•", font=body_font, fill=accent)
+                draw.text((card_x + 92, text_y), line, font=body_font, fill=IMAGE_TEXT_COLOR)
+                text_y += card_line_height
+
+            section_y = y2 + gap_between_cards
+
+        footer_y = height - footer_height + 10
+        draw.rounded_rectangle((34, footer_y, width - 34, height - 18), radius=24, fill=(255, 255, 255, 230), outline=(232, 240, 248, 255), width=1)
+        footer_text = "直接输入语音名称即可发送 · /voice.list 可查看语音列表"
+        draw.text((68, footer_y + 18), footer_text, font=footer_font, fill=(106, 122, 147))
+
+        save_path = self.data_dir / "voice_help.png"
+        img.save(save_path)
+        return save_path
+
     # ==================== 指令（仅修改 list 和 help） ====================
 
     @filter.command("voice.list")
@@ -567,38 +749,12 @@ class AiriVoice(Star):
     @filter.command("voice.help")
     async def help(self, event: AstrMessageEvent):
         is_admin = self._check_admin(event)
-        commands = [
-            "📋 /voice.list [页码] - 查看可用语音列表",
-            "🎲 随机语音 或 随机发条语音 - 随机发送一条语音",
-            "🎲 随机 关键词 - 在包含关键词的语音中随机发送",
-            "❓ /voice.help - 显示此帮助",
-        ]
-        if is_admin:
-            commands.extend([
-                "➕ /voice.add 名字 - 引用语音消息添加新语音",
-                "🗑️ /voice.delete 名字 - 删除通过 .add 添加的语音",
-                "🔄 /voice.reload - 重新加载语音列表",
-                "🔐 /voice.check - 查看当前用户权限",
-            ])
-
-        help_msg = f"""🌸 **AiriVoice 语音插件 v2.4**
-
-【核心功能】
-• 直接输入语音关键词即可发送对应语音
-• 支持本地 voices/ 文件夹、网页后台上传、/voice.add 三种添加方式
-
-【触发模式】
-🔹 direct（默认）：直接输入关键词
-🔹 prefix：需使用 #voice 关键词
-🔹 llm：由大模型通过工具调用
-
-【可用命令】
-{chr(10).join(commands)}
-
-【图片列表】
-可在插件配置中开启 list_as_image，让 /voice.list 以图片形式展示（更清晰）
-"""
-        yield event.plain_result(help_msg)
+        try:
+            help_path = self._create_help_image(is_admin)
+            yield event.chain_result([AstrImage.fromFileSystem(str(help_path))])
+        except Exception as e:
+            logger.error(f"[AiriVoice] 生成帮助图片失败：{e}")
+            yield event.plain_result("AiriVoice 帮助图片生成失败，请稍后重试。")
 
     # ==================== 以下所有方法完全保持不变 ====================
 
