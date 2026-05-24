@@ -19,6 +19,12 @@
     "hint": "每行一个用户 ID 或昵称，仅当 admin_mode 为 whitelist 时生效",
     "default": ""
   },
+  "list_as_image": {
+    "description": "语音列表是否以图片形式显示",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，/voice.list 将生成图片形式展示语音列表（更清晰美观，推荐开启）"
+  },
   "extra_voice_pool": {
     "description": "额外语音文件池（网页上传）",
     "hint": "上传 mp3/wav 等文件，文件名（去后缀）作为触发关键词。支持多文件上传。",
