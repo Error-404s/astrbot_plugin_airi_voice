@@ -20,9 +20,9 @@ PAGE_SIZE = 15
 IMAGE_PAGE_SIZE = 40         # 图片模式每页显示数量
 FONT_SIZE = 28
 IMAGE_WIDTH = 1360
-IMAGE_BG_COLOR_TOP = (246, 248, 252)
-IMAGE_BG_COLOR_BOTTOM = (235, 240, 247)
-IMAGE_TEXT_COLOR = (34, 41, 55)
+IMAGE_BG_COLOR_TOP = (248, 250, 255)
+IMAGE_BG_COLOR_BOTTOM = (240, 244, 250)
+IMAGE_TEXT_COLOR = (30, 41, 59)
 
 
 @dataclass
@@ -419,12 +419,12 @@ class AiriVoice(Star):
         page_keys = self.sorted_keys[start:start + IMAGE_PAGE_SIZE]
 
         columns = 2
-        padding_x = 64
-        card_gap_x = 26
-        card_gap_y = 18
-        header_height = 160
+        padding_x = 68
+        card_gap_x = 24
+        card_gap_y = 16
+        header_height = 156
         footer_height = 92
-        card_height = 82
+        card_height = 86
         content_width = IMAGE_WIDTH - padding_x * 2
         card_width = (content_width - card_gap_x) // columns
         rows = max(1, (len(page_keys) + columns - 1) // columns)
@@ -435,49 +435,50 @@ class AiriVoice(Star):
         draw = ImageDraw.Draw(img)
 
         accent_colors = [
-            (59, 130, 246),
-            (20, 184, 166),
-            (245, 158, 11),
-            (99, 102, 241),
+            (96, 165, 250),
+            (45, 212, 191),
+            (251, 191, 36),
+            (129, 140, 248),
         ]
 
-        draw.ellipse((-120, -100, 360, 380), fill=(59, 130, 246, 28))
-        draw.ellipse((IMAGE_WIDTH - 380, 20, IMAGE_WIDTH + 80, 480), fill=(20, 184, 166, 24))
+        draw.ellipse((-120, -110, 360, 370), fill=(96, 165, 250, 20))
+        draw.ellipse((IMAGE_WIDTH - 360, 8, IMAGE_WIDTH + 100, 460), fill=(45, 212, 191, 18))
+        draw.ellipse((IMAGE_WIDTH * 0.28, -120, IMAGE_WIDTH * 0.62, 150), fill=(251, 191, 36, 10))
 
-        header_box = (36, 26, IMAGE_WIDTH - 36, 144)
-        shadow_box = (header_box[0] + 6, header_box[1] + 8, header_box[2] + 6, header_box[3] + 8)
-        draw.rounded_rectangle(shadow_box, radius=32, fill=(0, 0, 0, 20))
-        draw.rounded_rectangle(header_box, radius=32, fill=(255, 255, 255, 244), outline=(224, 231, 240, 255), width=2)
+        header_box = (34, 24, IMAGE_WIDTH - 34, 144)
+        shadow_box = (header_box[0] + 4, header_box[1] + 6, header_box[2] + 4, header_box[3] + 6)
+        draw.rounded_rectangle(shadow_box, radius=34, fill=(15, 23, 42, 16))
+        draw.rounded_rectangle(header_box, radius=34, fill=(255, 255, 255, 246), outline=(226, 232, 240, 255), width=2)
 
-        title_font = self._load_image_font(38, bold=True)
+        title_font = self._load_image_font(36, bold=True)
         subtitle_font = self._load_image_font(20)
-        stat_font = self._load_image_font(22, bold=True)
+        stat_font = self._load_image_font(20, bold=True)
         footer_font = self._load_image_font(22)
-        card_title_font = self._load_image_font(28, bold=True)
+        card_title_font = self._load_image_font(26, bold=True)
         card_hint_font = self._load_image_font(18)
-        badge_font = self._load_image_font(18, bold=True)
+        badge_font = self._load_image_font(16, bold=True)
 
         title = "AiriVoice 语音列表"
-        subtitle = f"第 {page}/{total_pages} 页 · 共 {total} 个语音 · 双列卡片展示"
-        draw.text((68, 46), title, font=title_font, fill=(20, 28, 45))
-        draw.text((68, 96), subtitle, font=subtitle_font, fill=(92, 102, 121))
+        subtitle = f"第 {page}/{total_pages} 页 · 共 {total} 个语音"
+        draw.text((70, 44), title, font=title_font, fill=(15, 23, 42))
+        draw.text((70, 94), subtitle, font=subtitle_font, fill=(100, 116, 139))
 
         pill_y = 50
         pills = [
-            ("总数", str(total), (235, 245, 255), (59, 130, 246)),
-            ("页码", f"{page}/{total_pages}", (236, 250, 248), (20, 184, 166)),
+            ("总数", str(total), (239, 246, 255), (59, 130, 246)),
+            ("页码", f"{page}/{total_pages}", (236, 253, 250), (20, 184, 166)),
         ]
-        pill_x = IMAGE_WIDTH - 408
+        pill_x = IMAGE_WIDTH - 392
         for label, value, pill_bg, pill_fg in pills:
-            pill_width = 156 if label == "总数" else 168
+            pill_width = 148 if label == "总数" else 166
             draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_width, pill_y + 48), radius=24, fill=pill_bg)
-            draw.text((pill_x + 16, pill_y + 10), label, font=subtitle_font, fill=(85, 96, 114))
+            draw.text((pill_x + 16, pill_y + 10), label, font=subtitle_font, fill=(100, 116, 139))
             value_box = draw.textbbox((0, 0), value, font=stat_font)
             value_width = value_box[2] - value_box[0]
             draw.text((pill_x + pill_width - value_width - 16, pill_y + 8), value, font=stat_font, fill=pill_fg)
             pill_x += pill_width + 14
 
-        card_top = 176
+        card_top = 174
         for index, name in enumerate(page_keys):
             row = index // columns
             col = index % columns
@@ -487,28 +488,28 @@ class AiriVoice(Star):
             y2 = y1 + card_height
             accent = accent_colors[index % len(accent_colors)]
 
-            draw.rounded_rectangle((x1 + 5, y1 + 7, x2 + 5, y2 + 7), radius=24, fill=(0, 0, 0, 18))
-            draw.rounded_rectangle((x1, y1, x2, y2), radius=24, fill=(255, 255, 255, 250), outline=(227, 233, 242, 255), width=2)
-            draw.rounded_rectangle((x1, y1, x1 + 12, y2), radius=8, fill=accent)
+            draw.rounded_rectangle((x1 + 3, y1 + 5, x2 + 3, y2 + 5), radius=28, fill=(15, 23, 42, 14))
+            draw.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 252), outline=(226, 232, 240, 255), width=2)
+            draw.rounded_rectangle((x1, y1, x1 + 8, y2), radius=8, fill=accent)
 
-            badge_box = (x1 + 22, y1 + 22, x1 + 58, y1 + 58)
-            draw.ellipse(badge_box, fill=(accent[0], accent[1], accent[2], 28), outline=accent, width=2)
+            badge_box = (x1 + 20, y1 + 24, x1 + 56, y1 + 60)
+            draw.ellipse(badge_box, fill=(accent[0], accent[1], accent[2], 20), outline=accent, width=2)
             badge_text = f"{start + index + 1:02d}"
             badge_bounds = draw.textbbox((0, 0), badge_text, font=badge_font)
             badge_text_x = badge_box[0] + (badge_box[2] - badge_box[0] - (badge_bounds[2] - badge_bounds[0])) / 2
             badge_text_y = badge_box[1] + (badge_box[3] - badge_box[1] - (badge_bounds[3] - badge_bounds[1])) / 2 - 1
             draw.text((badge_text_x, badge_text_y), badge_text, font=badge_font, fill=accent)
 
-            name_x = x1 + 78
-            name_max_width = card_width - 108
+            name_x = x1 + 72
+            name_max_width = card_width - 102
             fitted_name = self._fit_text(draw, name, card_title_font, name_max_width)
-            draw.text((name_x, y1 + 18), fitted_name, font=card_title_font, fill=IMAGE_TEXT_COLOR)
-            draw.text((name_x, y1 + 50), "直接输入关键词即可发送", font=card_hint_font, fill=(102, 113, 132))
+            draw.text((name_x, y1 + 20), fitted_name, font=card_title_font, fill=IMAGE_TEXT_COLOR)
+            draw.text((name_x, y1 + 50), "直接输入关键词即可发送", font=card_hint_font, fill=(109, 122, 140))
 
         footer_y = height - footer_height + 10
-        draw.rounded_rectangle((36, footer_y, IMAGE_WIDTH - 36, height - 18), radius=22, fill=(255, 255, 255, 220), outline=(225, 232, 241, 255), width=1)
+        draw.rounded_rectangle((34, footer_y, IMAGE_WIDTH - 34, height - 18), radius=24, fill=(255, 255, 255, 222), outline=(226, 232, 240, 255), width=1)
         footer_text = "直接输入语音名称即可发送 · /voice.list [页码] 可翻页"
-        draw.text((68, footer_y + 18), footer_text, font=footer_font, fill=(93, 103, 121))
+        draw.text((68, footer_y + 18), footer_text, font=footer_font, fill=(100, 116, 139))
 
         if total_pages > 1:
             nav_parts = []
