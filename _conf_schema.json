@@ -22,7 +22,7 @@
   "list_as_image": {
     "description": "语音列表是否以图片形式显示",
     "type": "bool",
-    "default": false,
+    "default": true,
     "hint": "开启后，/voice.list 将生成图片形式展示语音列表（更清晰美观，推荐开启）"
   },
   "extra_voice_pool": {
