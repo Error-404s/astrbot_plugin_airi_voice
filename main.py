@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Set
 import re
 import random
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
@@ -428,6 +428,20 @@ class AiriVoice(Star):
             )
             draw.line((0, y, width, y), fill=color)
 
+    def _draw_sakura_cluster(self, draw: ImageDraw.ImageDraw, x: int, y: int, size: int, color: tuple[int, int, int, int]) -> None:
+        petal = max(6, size // 5)
+        offsets = [
+            (0, -size),
+            (size - petal, -petal),
+            (size // 2, size - petal),
+            (-petal, size // 2),
+            (size // 3, size // 3),
+        ]
+        for ox, oy in offsets:
+            draw.ellipse((x + ox, y + oy, x + ox + petal, y + oy + petal), fill=color)
+        center = (x + size // 2, y + size // 2)
+        draw.ellipse((center[0] - petal // 2, center[1] - petal // 2, center[0] + petal // 2, center[1] + petal // 2), fill=(255, 214, 221, 190))
+
     # ==================== 新增：图片生成方法 ====================
     def _create_voice_list_image(self, page: int = 1) -> Path:
         total = len(self.sorted_keys)
@@ -561,16 +575,16 @@ class AiriVoice(Star):
         footer_font = self._load_image_font(18)
 
         commands = [
-            "📋 /voice.list [页码] - 查看可用语音列表",
-            "🎲 随机语音 或 随机发条语音 - 随机发送一条语音",
-            "🎲 随机 关键词 - 在包含关键词的语音中随机发送",
-            "❓ /voice.help - 显示此帮助",
+            "/voice.list [页码] - 查看可用语音列表",
+            "随机语音 或 随机发条语音 - 随机发送一条语音",
+            "随机 关键词 - 在包含关键词的语音中随机发送",
+            "/voice.help - 显示此帮助",
         ]
         admin_commands = [
-            "➕ /voice.add 名字 - 引用语音消息添加新语音",
-            "🗑️ /voice.delete 名字 - 删除通过 .add 添加的语音",
-            "🔄 /voice.reload - 重新加载语音列表",
-            "🔐 /voice.check - 查看当前用户权限",
+            "/voice.add 名字 - 引用语音消息添加新语音",
+            "/voice.delete 名字 - 删除通过 .add 添加的语音",
+            "/voice.reload - 重新加载语音列表",
+            "/voice.check - 查看当前用户权限",
         ] if is_admin else []
 
         sections = [
@@ -636,18 +650,36 @@ class AiriVoice(Star):
         height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
 
         img = Image.new("RGBA", (width, height), IMAGE_BG_COLOR_TOP)
-        self._fill_vertical_gradient(img, IMAGE_BG_COLOR_TOP, IMAGE_BG_COLOR_BOTTOM)
-        draw = ImageDraw.Draw(img)
+        self._fill_vertical_gradient(img, (255, 246, 250), (240, 248, 255))
 
-        draw.ellipse((-110, -120, 370, 360), fill=(244, 114, 182, 18))
-        draw.ellipse((width - 360, 8, width + 100, 460), fill=(45, 212, 191, 16))
-        draw.ellipse((width * 0.30, -130, width * 0.64, 140), fill=(168, 85, 247, 9))
-        draw.ellipse((width * 0.72, 18, width * 0.90, 138), fill=(96, 165, 250, 10))
+        bg_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        bg_draw = ImageDraw.Draw(bg_overlay)
+        bg_draw.ellipse((-120, -110, 340, 350), fill=(244, 114, 182, 68))
+        bg_draw.ellipse((width - 390, 10, width + 70, 470), fill=(45, 212, 191, 64))
+        bg_draw.ellipse((width * 0.26, -120, width * 0.64, 170), fill=(168, 85, 247, 44))
+        bg_draw.ellipse((width * 0.62, 44, width * 0.96, 310), fill=(96, 165, 250, 52))
+        bg_draw.ellipse((40, height - 240, 360, height + 80), fill=(251, 191, 36, 34))
+        bg_overlay = bg_overlay.filter(ImageFilter.GaussianBlur(48))
+        img = Image.alpha_composite(img, bg_overlay)
+
+        draw = ImageDraw.Draw(img)
+        sakura_draw = ImageDraw.Draw(img)
+        self._draw_sakura_cluster(sakura_draw, 44, 44, 54, (255, 182, 193, 160))
+        self._draw_sakura_cluster(sakura_draw, width - 128, 56, 50, (255, 192, 203, 150))
+        self._draw_sakura_cluster(sakura_draw, 120, height - 140, 48, (255, 179, 193, 120))
+        self._draw_sakura_cluster(sakura_draw, width - 220, height - 160, 56, (255, 170, 186, 120))
+
+        glass_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        glass_draw = ImageDraw.Draw(glass_layer)
 
         header_box = (34, 24, width - 34, 146)
         shadow_box = (header_box[0] + 4, header_box[1] + 6, header_box[2] + 4, header_box[3] + 6)
-        draw.rounded_rectangle(shadow_box, radius=36, fill=(244, 114, 182, 14))
-        draw.rounded_rectangle(header_box, radius=36, fill=(255, 255, 255, 250), outline=(232, 240, 248, 255), width=2)
+        glass_draw.rounded_rectangle(shadow_box, radius=36, fill=(255, 255, 255, 26))
+        glass_draw.rounded_rectangle(header_box, radius=36, fill=(255, 255, 255, 150), outline=(255, 255, 255, 130), width=2)
+
+        draw = ImageDraw.Draw(img)
+        img = Image.alpha_composite(img, glass_layer)
+        draw = ImageDraw.Draw(img)
 
         draw.text((70, 42), "AiriVoice 使用帮助", font=title_font, fill=(30, 41, 59))
         draw.text((70, 94), "一张图快速看懂如何使用、分页和管理语音", font=subtitle_font, fill=(106, 122, 147))
@@ -669,19 +701,19 @@ class AiriVoice(Star):
 
         section_y = top_y
         section_bg_colors = [
-            (255, 255, 255, 252),
-            (255, 255, 255, 252),
-            (255, 255, 255, 252),
-            (255, 255, 255, 252),
-            (255, 255, 255, 252),
+            (255, 255, 255, 146),
+            (255, 255, 255, 146),
+            (255, 255, 255, 146),
+            (255, 255, 255, 146),
+            (255, 255, 255, 146),
         ]
 
         for index, ((section_title, _, accent), wrapped_lines, card_height, card_bg) in enumerate(zip(sections, wrapped_sections, card_heights, section_bg_colors)):
             y1 = section_y
             y2 = y1 + card_height
 
-            draw.rounded_rectangle((card_x + 3, y1 + 5, card_x + card_width + 3, y2 + 5), radius=30, fill=(244, 114, 182, 12))
-            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=30, fill=card_bg, outline=(231, 237, 245, 255), width=2)
+            draw.rounded_rectangle((card_x + 3, y1 + 5, card_x + card_width + 3, y2 + 5), radius=30, fill=(244, 114, 182, 10))
+            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=30, fill=card_bg, outline=(255, 255, 255, 180), width=2)
             draw.rounded_rectangle((card_x, y1, card_x + 8, y2), radius=8, fill=accent)
 
             icon_box = (card_x + 22, y1 + 22, card_x + 58, y1 + 58)
