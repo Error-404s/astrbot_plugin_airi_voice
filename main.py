@@ -17,12 +17,11 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 ALLOWED_EXT = {".mp3", ".wav", ".ogg", ".silk", ".amr"}
 PAGE_SIZE = 15
-IMAGE_PAGE_SIZE = 40         # 图片模式每页显示数量
+IMAGE_PAGE_SIZE = 45          # 图片模式每页显示数量
 FONT_SIZE = 28
-IMAGE_WIDTH = 1360
-IMAGE_BG_COLOR_TOP = (246, 248, 252)
-IMAGE_BG_COLOR_BOTTOM = (235, 240, 247)
-IMAGE_TEXT_COLOR = (34, 41, 55)
+IMAGE_WIDTH = 1250
+IMAGE_BG_COLOR = (245, 245, 250)
+IMAGE_TEXT_COLOR = (40, 40, 50)
 
 
 @dataclass
@@ -368,158 +367,42 @@ class AiriVoice(Star):
             return False
         return False
 
-    def _load_image_font(self, size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-        font_candidates = [
-            "C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc",
-            "msyhbd.ttc" if bold else "msyh.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ]
-        for font_path in font_candidates:
-            try:
-                return ImageFont.truetype(font_path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    def _fit_text(self, draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
-        if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
-            return text
-        ellipsis = "…"
-        trimmed = text
-        while trimmed:
-            trimmed = trimmed[:-1]
-            candidate = trimmed + ellipsis
-            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
-                return candidate
-        return ellipsis
-
-    def _fill_vertical_gradient(self, img: Image.Image, top_color, bottom_color) -> None:
-        width, height = img.size
-        draw = ImageDraw.Draw(img)
-        if height <= 1:
-            draw.rectangle((0, 0, width, height), fill=top_color)
-            return
-        for y in range(height):
-            ratio = y / (height - 1)
-            color = tuple(
-                int(top_color[index] * (1 - ratio) + bottom_color[index] * ratio)
-                for index in range(3)
-            )
-            draw.line((0, y, width, y), fill=color)
-
     # ==================== 新增：图片生成方法 ====================
     def _create_voice_list_image(self, page: int = 1) -> Path:
         total = len(self.sorted_keys)
-        total_pages = max(1, (total + IMAGE_PAGE_SIZE - 1) // IMAGE_PAGE_SIZE)
+        total_pages = (total + IMAGE_PAGE_SIZE - 1) // IMAGE_PAGE_SIZE
         page = max(1, min(page, total_pages))
 
         start = (page - 1) * IMAGE_PAGE_SIZE
         page_keys = self.sorted_keys[start:start + IMAGE_PAGE_SIZE]
 
-        columns = 2
-        padding_x = 64
-        card_gap_x = 26
-        card_gap_y = 18
-        header_height = 160
-        footer_height = 92
-        card_height = 82
-        content_width = IMAGE_WIDTH - padding_x * 2
-        card_width = (content_width - card_gap_x) // columns
-        rows = max(1, (len(page_keys) + columns - 1) // columns)
-        height = header_height + rows * card_height + (rows - 1) * card_gap_y + footer_height
+        line_height = FONT_SIZE + 14
+        height = 140 + len(page_keys) * line_height + 90
 
-        img = Image.new("RGBA", (IMAGE_WIDTH, height), IMAGE_BG_COLOR_TOP)
-        self._fill_vertical_gradient(img, IMAGE_BG_COLOR_TOP, IMAGE_BG_COLOR_BOTTOM)
+        img = Image.new('RGB', (IMAGE_WIDTH, height), IMAGE_BG_COLOR)
         draw = ImageDraw.Draw(img)
 
-        accent_colors = [
-            (59, 130, 246),
-            (20, 184, 166),
-            (245, 158, 11),
-            (99, 102, 241),
-        ]
+        try:
+            font = ImageFont.truetype("msyh.ttc", FONT_SIZE)          # Windows
+        except:
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", FONT_SIZE)
+            except:
+                font = ImageFont.load_default()
 
-        draw.ellipse((-120, -100, 360, 380), fill=(59, 130, 246, 28))
-        draw.ellipse((IMAGE_WIDTH - 380, 20, IMAGE_WIDTH + 80, 480), fill=(20, 184, 166, 24))
+        # 标题
+        title = f"AiriVoice 语音列表 - 第 {page}/{total_pages} 页  共 {total} 个"
+        draw.text((60, 45), title, font=font, fill=(70, 70, 130))
 
-        header_box = (36, 26, IMAGE_WIDTH - 36, 144)
-        shadow_box = (header_box[0] + 6, header_box[1] + 8, header_box[2] + 6, header_box[3] + 8)
-        draw.rounded_rectangle(shadow_box, radius=32, fill=(0, 0, 0, 20))
-        draw.rounded_rectangle(header_box, radius=32, fill=(255, 255, 255, 244), outline=(224, 231, 240, 255), width=2)
+        # 语音列表
+        y = 130
+        for i, name in enumerate(page_keys):
+            draw.text((70, y), f"{start + i + 1:2d}. {name}", font=font, fill=IMAGE_TEXT_COLOR)
+            y += line_height
 
-        title_font = self._load_image_font(38, bold=True)
-        subtitle_font = self._load_image_font(20)
-        stat_font = self._load_image_font(22, bold=True)
-        footer_font = self._load_image_font(22)
-        card_title_font = self._load_image_font(28, bold=True)
-        card_hint_font = self._load_image_font(18)
-        badge_font = self._load_image_font(18, bold=True)
-
-        title = "AiriVoice 语音列表"
-        subtitle = f"第 {page}/{total_pages} 页 · 共 {total} 个语音 · 双列卡片展示"
-        draw.text((68, 46), title, font=title_font, fill=(20, 28, 45))
-        draw.text((68, 96), subtitle, font=subtitle_font, fill=(92, 102, 121))
-
-        pill_y = 50
-        pills = [
-            ("总数", str(total), (235, 245, 255), (59, 130, 246)),
-            ("页码", f"{page}/{total_pages}", (236, 250, 248), (20, 184, 166)),
-        ]
-        pill_x = IMAGE_WIDTH - 408
-        for label, value, pill_bg, pill_fg in pills:
-            pill_width = 156 if label == "总数" else 168
-            draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_width, pill_y + 48), radius=24, fill=pill_bg)
-            draw.text((pill_x + 16, pill_y + 10), label, font=subtitle_font, fill=(85, 96, 114))
-            value_box = draw.textbbox((0, 0), value, font=stat_font)
-            value_width = value_box[2] - value_box[0]
-            draw.text((pill_x + pill_width - value_width - 16, pill_y + 8), value, font=stat_font, fill=pill_fg)
-            pill_x += pill_width + 14
-
-        card_top = 176
-        for index, name in enumerate(page_keys):
-            row = index // columns
-            col = index % columns
-            x1 = padding_x + col * (card_width + card_gap_x)
-            y1 = card_top + row * (card_height + card_gap_y)
-            x2 = x1 + card_width
-            y2 = y1 + card_height
-            accent = accent_colors[index % len(accent_colors)]
-
-            draw.rounded_rectangle((x1 + 5, y1 + 7, x2 + 5, y2 + 7), radius=24, fill=(0, 0, 0, 18))
-            draw.rounded_rectangle((x1, y1, x2, y2), radius=24, fill=(255, 255, 255, 250), outline=(227, 233, 242, 255), width=2)
-            draw.rounded_rectangle((x1, y1, x1 + 12, y2), radius=8, fill=accent)
-
-            badge_box = (x1 + 22, y1 + 22, x1 + 58, y1 + 58)
-            draw.ellipse(badge_box, fill=(accent[0], accent[1], accent[2], 28), outline=accent, width=2)
-            badge_text = f"{start + index + 1:02d}"
-            badge_bounds = draw.textbbox((0, 0), badge_text, font=badge_font)
-            badge_text_x = badge_box[0] + (badge_box[2] - badge_box[0] - (badge_bounds[2] - badge_bounds[0])) / 2
-            badge_text_y = badge_box[1] + (badge_box[3] - badge_box[1] - (badge_bounds[3] - badge_bounds[1])) / 2 - 1
-            draw.text((badge_text_x, badge_text_y), badge_text, font=badge_font, fill=accent)
-
-            name_x = x1 + 78
-            name_max_width = card_width - 108
-            fitted_name = self._fit_text(draw, name, card_title_font, name_max_width)
-            draw.text((name_x, y1 + 18), fitted_name, font=card_title_font, fill=IMAGE_TEXT_COLOR)
-            draw.text((name_x, y1 + 50), "直接输入关键词即可发送", font=card_hint_font, fill=(102, 113, 132))
-
-        footer_y = height - footer_height + 10
-        draw.rounded_rectangle((36, footer_y, IMAGE_WIDTH - 36, height - 18), radius=22, fill=(255, 255, 255, 220), outline=(225, 232, 241, 255), width=1)
-        footer_text = "直接输入语音名称即可发送 · /voice.list [页码] 可翻页"
-        draw.text((68, footer_y + 18), footer_text, font=footer_font, fill=(93, 103, 121))
-
-        if total_pages > 1:
-            nav_parts = []
-            if page > 1:
-                nav_parts.append(f"上一页 /voice.list {page - 1}")
-            if page < total_pages:
-                nav_parts.append(f"下一页 /voice.list {page + 1}")
-            nav_text = " · ".join(nav_parts)
-            nav_box = draw.textbbox((0, 0), nav_text, font=footer_font)
-            nav_width = nav_box[2] - nav_box[0]
-            draw.text((IMAGE_WIDTH - nav_width - 68, footer_y + 18), nav_text, font=footer_font, fill=(59, 130, 246))
+        # 页脚
+        footer = "直接输入关键词即可发送语音 • 使用 /voice.list [页码] 翻页"
+        draw.text((60, height - 65), footer, font=ImageFont.truetype(font.path if hasattr(font,'path') else None, 24) if hasattr(font,'path') else font, fill=(110, 110, 120))
 
         save_path = self.data_dir / f"voice_list_p{page}.png"
         img.save(save_path)
@@ -535,16 +418,13 @@ class AiriVoice(Star):
 
         args = (event.message_str or "").strip().split()
         page = max(1, int(args[1])) if len(args) > 1 and args[1].isdigit() else 1
-        total = len(self.sorted_keys)
-        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
 
         if self.list_as_image:
-            if page > total_pages:
-                yield event.plain_result(f"页码过大～总共 {total_pages} 页")
-                return
             img_path = self._create_voice_list_image(page)
             yield event.chain_result([AstrImage.fromFileSystem(str(img_path))])
         else:
+            total = len(self.sorted_keys)
+            total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
             if page > total_pages:
                 yield event.plain_result(f"页码过大～总共 {total_pages} 页")
                 return
@@ -723,6 +603,31 @@ class AiriVoice(Star):
             logger.error(f"[AiriVoice] 删除语音失败：{e}")
             yield event.plain_result(f"❌ 删除失败：{str(e)}")
 
+    @filter.command("voice.list")
+    async def list_voices(self, event: AstrMessageEvent):
+        if not self.sorted_keys:
+            yield event.plain_result("当前没有可用语音～\n将语音文件放入 voices/ 目录或通过网页上传")
+            return
+        args = (event.message_str or "").strip().split()
+        page = max(1, int(args[1])) if len(args) > 1 and args[1].isdigit() else 1
+        total = len(self.sorted_keys)
+        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        if page > total_pages:
+            yield event.plain_result(f"页码过大～总共 {total_pages} 页")
+            return
+        start = (page - 1) * PAGE_SIZE
+        page_keys = self.sorted_keys[start:start + PAGE_SIZE]
+        msg = f"📋 可用语音（第 {page}/{total_pages} 页，共 {total} 个）：\n\n"
+        msg += "\n".join(f"• {k}" for k in page_keys)
+        if total_pages > 1:
+            nav = []
+            if page > 1:
+                nav.append(f"/voice.list {page-1} ← 上一页")
+            if page < total_pages:
+                nav.append(f"/voice.list {page+1} → 下一页")
+            msg += "\n\n" + " | ".join(nav)
+        yield event.plain_result(msg)
+
     @filter.command("voice.reload")
     async def reload_voices(self, event: AstrMessageEvent):
         if not self._check_admin(event):
@@ -733,6 +638,36 @@ class AiriVoice(Star):
         self._update_sorted_keys()
         self.last_pool_len = len(self.config.get("extra_voice_pool", []))
         yield event.plain_result(f"✅ 已重新加载，共 {len(self.voice_map)} 个语音")
+
+    @filter.command("voice.help")
+    async def help(self, event: AstrMessageEvent):
+        is_admin = self._check_admin(event)
+        commands = [
+            "📋 /voice.list [页码] - 查看可用语音",
+            "🎶 /随机语音 - 随机回复一个语音",
+            "❓ /voice.help - 显示此帮助",
+        ]
+        if is_admin:
+            commands.append("➕ /voice.add 名字 - 引用语音消息添加新语音 (管理员)")
+            commands.append("🗑️ /voice.delete 名字 - 删除语音 (管理员)")
+            commands.append("🔄 /voice.reload - 重新加载语音列表 (管理员)")
+        help_msg = f"""🌸 AiriVoice 语音插件v2.3
+
+【使用方法】
+将语音文件放入 voices/ 目录
+或在 AstrBot 网页后台 → 插件配置 → 上传语音
+或引用语音消息发送 /voice.add 名字
+文件名即为关键词（不含扩展名）
+直接输入关键词即可发送语音
+
+【触发模式】
+🔹 direct: 直接输入关键词触发
+🔹 prefix: 使用 #voice 关键词 触发
+🔹 llm: 仅注册 LLM 工具，由大模型调用语音功能
+
+【命令】
+{chr(10).join(commands)}"""
+        yield event.plain_result(help_msg)
 
     @filter.command("voice.check")
     async def check_permission(self, event: AstrMessageEvent):
