@@ -461,10 +461,10 @@ class AiriVoice(Star):
         h = header_height + rows * card_height + (rows - 1) * gap_y + footer_height
 
         img = Image.new("RGBA", (IMAGE_WIDTH, h), (255, 255, 255, 255))
-        self._fill_pastel_gradient(img, [(255, 238, 247), (255, 246, 228), (236, 248, 255)])
+        self._fill_pastel_gradient(img, [(255, 244, 249), (255, 250, 239), (240, 248, 255)])
         d = ImageDraw.Draw(img)
 
-        accent = [(244, 114, 182), (96, 165, 250), (45, 212, 191), (168, 85, 247)]
+        accent = [(252, 168, 206), (142, 189, 255), (117, 225, 212), (202, 153, 255)]
 
         # transparent header with subtle outline
         header = Image.new("RGBA", (IMAGE_WIDTH, h), (0, 0, 0, 0))
@@ -485,7 +485,7 @@ class AiriVoice(Star):
         d.rounded_rectangle((IMAGE_WIDTH - 392, 50, IMAGE_WIDTH - 244, 98), radius=24, fill=(255, 240, 245))
         d.rounded_rectangle((IMAGE_WIDTH - 230, 50, IMAGE_WIDTH - 64, 98), radius=24, fill=(235, 248, 255))
         d.text((IMAGE_WIDTH - 376, 60), "总数", font=sf, fill=(101, 116, 139))
-        d.text((IMAGE_WIDTH - 296, 58), str(total), font=self._load_image_font(20, bold=True), fill=(236, 72, 153))
+        d.text((IMAGE_WIDTH - 296, 58), str(total), font=self._load_image_font(20, bold=True), fill=(245, 99, 170))
         d.text((IMAGE_WIDTH - 214, 60), "页码", font=sf, fill=(101, 116, 139))
         d.text((IMAGE_WIDTH - 142, 58), f"{page}/{total_pages}", font=self._load_image_font(20, bold=True), fill=(14, 165, 233))
 
@@ -497,14 +497,16 @@ class AiriVoice(Star):
             x2 = x1 + card_w
             y2 = y1 + card_height
             ac = accent[i % 4]
-            d.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 252), outline=(224, 226, 238, 255), width=1)
+            d.rounded_rectangle((x1 + 3, y1 + 5, x2 + 3, y2 + 5), radius=28, fill=(255, 255, 255, 72))
+            d.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 255), outline=(223, 228, 241, 255), width=1)
             d.rounded_rectangle((x1, y1, x1 + 6, y2), radius=6, fill=ac)
-            d.ellipse((x1 + 20, y1 + 24, x1 + 56, y1 + 60), fill=(ac[0], ac[1], ac[2], 34), outline=(ac[0], ac[1], ac[2], 145), width=3)
+            d.ellipse((x1 + 22, y1 + 25, x1 + 54, y1 + 57), fill=(ac[0], ac[1], ac[2], 44))
             d.text((x1 + 72, y1 + 20), name, font=bf, fill=IMAGE_TEXT_COLOR)
             d.text((x1 + 72, y1 + 50), "直接输入关键词即可发送", font=hf, fill=(124, 138, 161))
 
         footer_y = h - footer_height + 10
-        d.rounded_rectangle((34, footer_y, IMAGE_WIDTH - 34, h - 18), radius=24, fill=(255, 255, 255, 240), outline=(224, 226, 238, 255), width=1)
+        d.rounded_rectangle((34, footer_y + 4, IMAGE_WIDTH - 34, h - 14), radius=24, fill=(255, 255, 255, 74))
+        d.rounded_rectangle((34, footer_y, IMAGE_WIDTH - 34, h - 18), radius=24, fill=(255, 255, 255, 248), outline=(223, 228, 241, 255), width=1)
         d.text((68, footer_y + 18), "直接输入语音名称即可发送 · /voice.list [页码] 可翻页", font=ff, fill=(106, 122, 147))
 
         if total_pages > 1:
@@ -516,7 +518,7 @@ class AiriVoice(Star):
             nav_text = " · ".join(nav_parts)
             nav_box = d.textbbox((0, 0), nav_text, font=ff)
             nav_width = nav_box[2] - nav_box[0]
-            d.text((IMAGE_WIDTH - nav_width - 68, footer_y + 18), nav_text, font=ff, fill=(236, 72, 153))
+            d.text((IMAGE_WIDTH - nav_width - 68, footer_y + 18), nav_text, font=ff, fill=(245, 99, 170))
 
         save_path = self.data_dir / f"voice_list_p{page}.png"
         img.save(save_path)
@@ -601,7 +603,7 @@ class AiriVoice(Star):
         height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
 
         img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
-        self._fill_pastel_gradient(img, [(255, 238, 247), (255, 247, 226), (238, 248, 255)])
+        self._fill_pastel_gradient(img, [(255, 244, 249), (255, 250, 239), (240, 248, 255)])
 
         draw = ImageDraw.Draw(img)
 
@@ -619,8 +621,8 @@ class AiriVoice(Star):
 
         pill_y = 50
         pill_specs = [
-            ("状态", "已就绪", (255, 240, 245), (236, 72, 153), 210),
-            ("模式", self.trigger_mode, (235, 248, 255), (14, 165, 233), 168),
+            ("状态", "已就绪", (255, 241, 246), (245, 99, 170), 210),
+            ("模式", self.trigger_mode, (236, 249, 255), (70, 154, 244), 168),
         ]
 
         x_right = width - 68
@@ -646,10 +648,11 @@ class AiriVoice(Star):
         for index, ((section_title, _, accent), wrapped_lines, card_height, card_bg) in enumerate(zip(sections, wrapped_sections, card_heights, section_bg_colors)):
             y1 = section_y
             y2 = y1 + card_height
-            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=28, fill=(255, 255, 255, 252), outline=(224, 226, 238, 255), width=1)
+            draw.rounded_rectangle((card_x + 3, y1 + 5, card_x + card_width + 3, y2 + 5), radius=28, fill=(255, 255, 255, 72))
+            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=28, fill=(255, 255, 255, 255), outline=(223, 228, 241, 255), width=1)
             draw.rounded_rectangle((card_x, y1, card_x + 6, y2), radius=6, fill=accent)
             icon_box = (card_x + 22, y1 + 22, card_x + 58, y1 + 58)
-            draw.ellipse(icon_box, fill=(accent[0], accent[1], accent[2], 34), outline=(accent[0], accent[1], accent[2], 145), width=3)
+            draw.ellipse((card_x + 24, y1 + 24, card_x + 54, y1 + 54), fill=(accent[0], accent[1], accent[2], 44))
             draw.text((card_x + 70, y1 + 20), section_title, font=section_title_font, fill=(30, 41, 59))
             text_y = y1 + 64
             # use a colored bullet with ~80% opacity for better visibility
@@ -665,7 +668,8 @@ class AiriVoice(Star):
             section_y = y2 + gap_between_cards
 
         footer_y = height - footer_height + 10
-        draw.rounded_rectangle((34, footer_y, width - 34, height - 18), radius=24, fill=(255, 255, 255, 240), outline=(224, 226, 238, 255), width=1)
+        draw.rounded_rectangle((34, footer_y + 4, width - 34, height - 14), radius=24, fill=(255, 255, 255, 74))
+        draw.rounded_rectangle((34, footer_y, width - 34, height - 18), radius=24, fill=(255, 255, 255, 248), outline=(223, 228, 241, 255), width=1)
         draw.text((68, footer_y + 18), "直接输入语音名称即可发送 · /voice.list 可查看语音列表", font=footer_font, fill=(106, 122, 147))
 
         save_path = self.data_dir / "voice_help.png"
