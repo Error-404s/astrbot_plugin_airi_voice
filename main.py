@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Set
 import re
 import random
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
@@ -342,13 +342,21 @@ class AiriVoice(Star):
             color = tuple(int(top_color[i] * (1 - r) + bottom_color[i] * r) for i in range(3))
             draw.line((0, y, w, y), fill=color)
 
-    def _draw_sakura_cluster(self, draw: ImageDraw.ImageDraw, x: int, y: int, size: int, color: tuple) -> None:
-        petal = max(6, size // 5)
-        offsets = [(0, -size), (size - petal, -petal), (size // 2, size - petal), (-petal, size // 2), (size // 3, size // 3)]
-        for ox, oy in offsets:
-            draw.ellipse((x + ox, y + oy, x + ox + petal, y + oy + petal), fill=color)
-        cx, cy = x + size // 2, y + size // 2
-        draw.ellipse((cx - petal // 2, cy - petal // 2, cx + petal // 2, cy + petal // 2), fill=(255, 214, 221, 190))
+    def _fill_pastel_gradient(self, img: Image.Image, colors: List[tuple]) -> None:
+        w, h = img.size
+        draw = ImageDraw.Draw(img)
+        if len(colors) < 2:
+            self._fill_vertical_gradient(img, colors[0], colors[0])
+            return
+        segments = len(colors) - 1
+        for y in range(h):
+            t = y / max(1, h - 1)
+            seg = min(segments - 1, int(t * segments))
+            local_t = t * segments - seg
+            c1 = colors[seg]
+            c2 = colors[seg + 1]
+            color = tuple(int(c1[i] * (1 - local_t) + c2[i] * local_t) for i in range(3))
+            draw.line((0, y, w, y), fill=color)
 
     def _load_local_voices(self):
         count = 0
@@ -452,16 +460,11 @@ class AiriVoice(Star):
         rows = max(1, (len(page_keys) + columns - 1) // columns)
         h = header_height + rows * card_height + (rows - 1) * gap_y + footer_height
 
-        img = Image.new("RGBA", (IMAGE_WIDTH, h), IMAGE_BG_COLOR_TOP)
-        self._fill_vertical_gradient(img, IMAGE_BG_COLOR_TOP, IMAGE_BG_COLOR_BOTTOM)
+        img = Image.new("RGBA", (IMAGE_WIDTH, h), (255, 255, 255, 255))
+        self._fill_pastel_gradient(img, [(255, 238, 247), (255, 246, 228), (236, 248, 255)])
         d = ImageDraw.Draw(img)
 
         accent = [(244, 114, 182), (96, 165, 250), (45, 212, 191), (168, 85, 247)]
-
-        d.ellipse((-120, -110, 340, 350), fill=(244, 114, 182, 68))
-        d.ellipse((IMAGE_WIDTH - 390, 10, IMAGE_WIDTH + 70, 470), fill=(45, 212, 191, 64))
-        d.ellipse((IMAGE_WIDTH * 0.26, -120, IMAGE_WIDTH * 0.64, 170), fill=(168, 85, 247, 44))
-        d.ellipse((IMAGE_WIDTH * 0.62, 44, IMAGE_WIDTH * 0.96, 310), fill=(96, 165, 250, 52))
 
         # transparent header with subtle outline
         header = Image.new("RGBA", (IMAGE_WIDTH, h), (0, 0, 0, 0))
@@ -479,8 +482,8 @@ class AiriVoice(Star):
         d.text((70, 42), "AiriVoice 语音列表", font=tf, fill=(30, 41, 59))
         d.text((70, 94), f"第 {page}/{total_pages} 页 · 共 {total} 个语音", font=sf, fill=(106, 122, 147))
 
-        d.rounded_rectangle((IMAGE_WIDTH - 392, 50, IMAGE_WIDTH - 244, 98), radius=24, fill=(255, 236, 244))
-        d.rounded_rectangle((IMAGE_WIDTH - 230, 50, IMAGE_WIDTH - 64, 98), radius=24, fill=(236, 250, 255))
+        d.rounded_rectangle((IMAGE_WIDTH - 392, 50, IMAGE_WIDTH - 244, 98), radius=24, fill=(255, 240, 245))
+        d.rounded_rectangle((IMAGE_WIDTH - 230, 50, IMAGE_WIDTH - 64, 98), radius=24, fill=(235, 248, 255))
         d.text((IMAGE_WIDTH - 376, 60), "总数", font=sf, fill=(101, 116, 139))
         d.text((IMAGE_WIDTH - 296, 58), str(total), font=self._load_image_font(20, bold=True), fill=(236, 72, 153))
         d.text((IMAGE_WIDTH - 214, 60), "页码", font=sf, fill=(101, 116, 139))
@@ -494,14 +497,14 @@ class AiriVoice(Star):
             x2 = x1 + card_w
             y2 = y1 + card_height
             ac = accent[i % 4]
-            d.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 255), outline=(232, 238, 246, 255), width=1)
+            d.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 252), outline=(224, 226, 238, 255), width=1)
             d.rounded_rectangle((x1, y1, x1 + 6, y2), radius=6, fill=ac)
-            d.ellipse((x1 + 20, y1 + 24, x1 + 56, y1 + 60), fill=(ac[0], ac[1], ac[2], 10), outline=(ac[0], ac[1], ac[2], 180), width=2)
+            d.ellipse((x1 + 20, y1 + 24, x1 + 56, y1 + 60), fill=(ac[0], ac[1], ac[2], 34), outline=(ac[0], ac[1], ac[2], 145), width=3)
             d.text((x1 + 72, y1 + 20), name, font=bf, fill=IMAGE_TEXT_COLOR)
             d.text((x1 + 72, y1 + 50), "直接输入关键词即可发送", font=hf, fill=(124, 138, 161))
 
         footer_y = h - footer_height + 10
-        d.rounded_rectangle((34, footer_y, IMAGE_WIDTH - 34, h - 18), radius=24, fill=(255, 255, 255, 230), outline=(232, 240, 248, 255), width=1)
+        d.rounded_rectangle((34, footer_y, IMAGE_WIDTH - 34, h - 18), radius=24, fill=(255, 255, 255, 240), outline=(224, 226, 238, 255), width=1)
         d.text((68, footer_y + 18), "直接输入语音名称即可发送 · /voice.list [页码] 可翻页", font=ff, fill=(106, 122, 147))
 
         if total_pages > 1:
@@ -597,25 +600,10 @@ class AiriVoice(Star):
         gap_between_cards = gap_y
         height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
 
-        img = Image.new("RGBA", (width, height), IMAGE_BG_COLOR_TOP)
-        self._fill_vertical_gradient(img, (255, 246, 250), (240, 248, 255))
-
-        bg_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        bg_draw = ImageDraw.Draw(bg_overlay)
-        bg_draw.ellipse((-120, -110, 340, 350), fill=(244, 114, 182, 68))
-        bg_draw.ellipse((width - 390, 10, width + 70, 470), fill=(45, 212, 191, 64))
-        bg_draw.ellipse((width * 0.26, -120, width * 0.64, 170), fill=(168, 85, 247, 44))
-        bg_draw.ellipse((width * 0.62, 44, width * 0.96, 310), fill=(96, 165, 250, 52))
-        bg_draw.ellipse((40, height - 240, 360, height + 80), fill=(251, 191, 36, 34))
-        bg_overlay = bg_overlay.filter(ImageFilter.GaussianBlur(48))
-        img = Image.alpha_composite(img, bg_overlay)
+        img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+        self._fill_pastel_gradient(img, [(255, 238, 247), (255, 247, 226), (238, 248, 255)])
 
         draw = ImageDraw.Draw(img)
-        sakura_draw = ImageDraw.Draw(img)
-        self._draw_sakura_cluster(sakura_draw, 44, 44, 54, (255, 182, 193, 160))
-        self._draw_sakura_cluster(sakura_draw, width - 128, 56, 50, (255, 192, 203, 150))
-        self._draw_sakura_cluster(sakura_draw, 120, height - 140, 48, (255, 179, 193, 120))
-        self._draw_sakura_cluster(sakura_draw, width - 220, height - 160, 56, (255, 170, 186, 120))
 
         glass_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         glass_draw = ImageDraw.Draw(glass_layer)
@@ -630,19 +618,27 @@ class AiriVoice(Star):
         draw.text((70, 94), "一张图快速看懂如何使用、分页和管理语音", font=subtitle_font, fill=(106, 122, 147))
 
         pill_y = 50
-        pills = [
-            ("状态", "语音插件已就绪", (255, 236, 244), (236, 72, 153)),
-            ("模式", self.trigger_mode, (236, 250, 255), (14, 165, 233)),
+        pill_specs = [
+            ("状态", "已就绪", (255, 240, 245), (236, 72, 153), 210),
+            ("模式", self.trigger_mode, (235, 248, 255), (14, 165, 233), 168),
         ]
-        pill_x = width - 392
-        for label, value, pill_bg, pill_fg in pills:
-            pill_width = 150 if label == "状态" else 160
-            draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_width, pill_y + 48), radius=24, fill=pill_bg)
-            draw.text((pill_x + 16, pill_y + 10), label, font=subtitle_font, fill=(101, 116, 139))
-            value_box = draw.textbbox((0, 0), value, font=self._load_image_font(20, bold=True))
-            value_width = value_box[2] - value_box[0]
-            draw.text((pill_x + pill_width - value_width - 16, pill_y + 8), value, font=self._load_image_font(20, bold=True), fill=pill_fg)
-            pill_x += pill_width + 14
+
+        x_right = width - 68
+        gap_between = 14
+        pill_height = 48
+        for label, value, pill_bg, pill_fg, pill_w in reversed(pill_specs):
+            x0 = x_right - pill_w
+            x1 = x_right
+            value_font = self._load_image_font(18, bold=True)
+            value_box = draw.textbbox((0, 0), str(value), font=value_font)
+            label_box = draw.textbbox((0, 0), label, font=subtitle_font)
+            label_h = label_box[3] - label_box[1]
+            value_h = value_box[3] - value_box[1]
+            value_w = value_box[2] - value_box[0]
+            draw.rounded_rectangle((x0, pill_y, x1, pill_y + pill_height), radius=24, fill=pill_bg)
+            draw.text((x0 + 12, pill_y + (pill_height - label_h) / 2 - 1), label, font=subtitle_font, fill=(101, 116, 139))
+            draw.text((x1 - value_w - 12, pill_y + (pill_height - value_h) / 2 - 1), str(value), font=value_font, fill=pill_fg)
+            x_right = x0 - gap_between
 
         section_y = top_y
         section_bg_colors = [(255, 255, 255, 255)] * 5
@@ -650,23 +646,26 @@ class AiriVoice(Star):
         for index, ((section_title, _, accent), wrapped_lines, card_height, card_bg) in enumerate(zip(sections, wrapped_sections, card_heights, section_bg_colors)):
             y1 = section_y
             y2 = y1 + card_height
-            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=28, fill=(255, 255, 255, 255), outline=(232, 238, 246, 255), width=1)
+            draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=28, fill=(255, 255, 255, 252), outline=(224, 226, 238, 255), width=1)
             draw.rounded_rectangle((card_x, y1, card_x + 6, y2), radius=6, fill=accent)
             icon_box = (card_x + 22, y1 + 22, card_x + 58, y1 + 58)
-            draw.ellipse(icon_box, fill=(accent[0], accent[1], accent[2], 10), outline=(accent[0], accent[1], accent[2], 180), width=2)
+            draw.ellipse(icon_box, fill=(accent[0], accent[1], accent[2], 34), outline=(accent[0], accent[1], accent[2], 145), width=3)
             draw.text((card_x + 70, y1 + 20), section_title, font=section_title_font, fill=(30, 41, 59))
             text_y = y1 + 64
+            # use a colored bullet with ~80% opacity for better visibility
+            bullet_fill = (accent[0], accent[1], accent[2], int(255 * 0.8))
             for line in wrapped_lines:
                 if not line:
                     text_y += 8
                     continue
-                draw.text((card_x + 70, text_y), "•", font=body_font, fill=accent)
-                draw.text((card_x + 92, text_y), line, font=body_font, fill=IMAGE_TEXT_COLOR)
+                dot_box = (card_x + 72, text_y + 10, card_x + 82, text_y + 20)
+                draw.ellipse(dot_box, fill=bullet_fill)
+                draw.text((card_x + 94, text_y), line, font=body_font, fill=IMAGE_TEXT_COLOR)
                 text_y += card_line_height
             section_y = y2 + gap_between_cards
 
         footer_y = height - footer_height + 10
-        draw.rounded_rectangle((34, footer_y, width - 34, height - 18), radius=24, fill=(255, 255, 255, 230), outline=(232, 240, 248, 255), width=1)
+        draw.rounded_rectangle((34, footer_y, width - 34, height - 18), radius=24, fill=(255, 255, 255, 240), outline=(224, 226, 238, 255), width=1)
         draw.text((68, footer_y + 18), "直接输入语音名称即可发送 · /voice.list 可查看语音列表", font=footer_font, fill=(106, 122, 147))
 
         save_path = self.data_dir / "voice_help.png"
