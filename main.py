@@ -370,11 +370,12 @@ class AiriVoice(Star):
         bd = ImageDraw.Draw(base)
 
         # vertical multi-stop gradient
+        # lighter, near-white pastel stops
         stops = [
-            (255, 82, 140),
-            (255, 180, 110),
-            (117, 225, 212),
-            (166, 125, 255),
+            (255, 235, 245),
+            (255, 245, 230),
+            (225, 250, 245),
+            (240, 235, 255),
         ]
         segs = len(stops) - 1
         for y in range(h):
@@ -389,11 +390,12 @@ class AiriVoice(Star):
         # vibrant glows (large blurred ellipses)
         glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
+        # softer, lower-opacity glows
         glows = [
-            (int(-w * 0.15), int(-h * 0.25), int(w * 0.65), int(h * 0.45), (255, 82, 140, 160)),
-            (int(w * 0.55), int(-h * 0.15), int(w * 1.05), int(h * 0.5), (166, 125, 255, 140)),
-            (int(w * 0.18), int(h * 0.05), int(w * 0.9), int(h * 0.6), (117, 225, 212, 120)),
-            (int(-w * 0.08), int(h * 0.5), int(w * 0.45), int(h * 1.05), (255, 180, 110, 100)),
+            (int(-w * 0.15), int(-h * 0.25), int(w * 0.65), int(h * 0.45), (255, 220, 235, 96)),
+            (int(w * 0.55), int(-h * 0.15), int(w * 1.05), int(h * 0.5), (220, 200, 255, 72)),
+            (int(w * 0.18), int(h * 0.05), int(w * 0.9), int(h * 0.6), (200, 245, 240, 72)),
+            (int(-w * 0.08), int(h * 0.5), int(w * 0.45), int(h * 1.05), (255, 235, 200, 56)),
         ]
         for x0, y0, x1, y1, col in glows:
             gd.ellipse((x0, y0, x1, y1), fill=col)
@@ -403,7 +405,7 @@ class AiriVoice(Star):
         # subtle diagonal streaks: draw thin rotated translucent bands
         bands = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         bd2 = ImageDraw.Draw(bands)
-        band_colors = [(255, 255, 255, 18), (255, 255, 255, 10)]
+        band_colors = [(255, 255, 255, 12), (255, 255, 255, 6)]
         band_h = int(h * 0.08)
         for i in range(-2, 6):
             x = int(w * (i / 6.0))
@@ -414,7 +416,7 @@ class AiriVoice(Star):
         # small colorful bubbles/sparks
         sparks = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         sd = ImageDraw.Draw(sparks)
-        bubble_colors = [(255, 255, 255, 60), (255, 255, 255, 36), (255, 255, 255, 18)]
+        bubble_colors = [(255, 255, 255, 36), (255, 255, 255, 20), (255, 255, 255, 10)]
         random.seed(42)
         for _ in range(60):
             rx = random.randint(0, w)
@@ -424,6 +426,47 @@ class AiriVoice(Star):
             sd.ellipse((rx - r, ry - r, rx + r, ry + r), fill=col)
         sparks = sparks.filter(ImageFilter.GaussianBlur(radius=8))
         base = Image.alpha_composite(base, sparks)
+
+        # add extra PJSK-style decorative elements: musical notes, stars, neon bars
+        decor = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        dd = ImageDraw.Draw(decor)
+
+        # neon diagonal bars
+        for i, col in enumerate([(255, 255, 255, 18), (255, 255, 255, 8)]):
+            bx = int(w * (0.06 + i * 0.08))
+            dd.rectangle((bx, -h, bx + int(w * 0.12), h * 2), fill=col)
+        decor = decor.filter(ImageFilter.GaussianBlur(radius=36))
+
+        # small star helper
+        def _star(cx, cy, r, points=5):
+            pts = []
+            for pi in range(points * 2):
+                theta = pi * (3.14159265 / points)
+                rad = r if pi % 2 == 0 else r * 0.45
+                x = cx + int(rad * (1.0 * __import__('math').cos(theta)))
+                y = cy + int(rad * (1.0 * __import__('math').sin(theta)))
+                pts.append((x, y))
+            return pts
+
+        # scattered stars and music notes
+        random.seed(123)
+        for _ in range(28):
+            rx = random.randint(40, w - 40)
+            ry = random.randint(40, h - 40)
+            r = random.randint(6, 18)
+            # star (lighter)
+            dd.polygon(_star(rx, ry, r), fill=(255, 255, 255, random.randint(24, 88)))
+
+        # simple music notes (circle + stem)
+        for _ in range(12):
+            mx = random.randint(80, w - 120)
+            my = random.randint(80, h - 80)
+            mr = random.randint(8, 16)
+            dd.ellipse((mx - mr, my - mr, mx + mr, my + mr), fill=(255, 255, 255, 84))
+            dd.rectangle((mx + mr - 2, my - mr * 2, mx + mr + 2, my + mr), fill=(255, 255, 255, 92))
+
+        decor = decor.filter(ImageFilter.GaussianBlur(radius=6))
+        base = Image.alpha_composite(base, decor)
 
         # paste composed base onto target image in-place
         img.paste(base, (0, 0), base)
