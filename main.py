@@ -17,7 +17,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 ALLOWED_EXT = {".mp3", ".wav", ".ogg", ".silk", ".amr"}
 PAGE_SIZE = 15
-IMAGE_PAGE_SIZE = 40          # 图片模式每页显示数量
+IMAGE_PAGE_SIZE = 42          # 图片模式每页显示数量
 FONT_SIZE = 28
 IMAGE_WIDTH = 1360
 IMAGE_BG_COLOR_TOP = (252, 248, 255)
