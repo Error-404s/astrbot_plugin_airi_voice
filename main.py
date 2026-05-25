@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Set
 import re
 import random
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
@@ -17,7 +17,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 ALLOWED_EXT = {".mp3", ".wav", ".ogg", ".silk", ".amr"}
 PAGE_SIZE = 15
-IMAGE_PAGE_SIZE = 42          # 图片模式每页显示数量
+IMAGE_PAGE_SIZE = 40          # 图片模式每页显示数量
 FONT_SIZE = 28
 IMAGE_WIDTH = 1360
 IMAGE_BG_COLOR_TOP = (252, 248, 255)
@@ -358,6 +358,76 @@ class AiriVoice(Star):
             color = tuple(int(c1[i] * (1 - local_t) + c2[i] * local_t) for i in range(3))
             draw.line((0, y, w, y), fill=color)
 
+    def _fill_pjsk_background(self, img: Image.Image) -> None:
+        """Fill image with a PJSK-like vibrant, glossy background in-place.
+
+        Approach: draw a bright multi-stop gradient, overlay several large
+        semi-transparent blurred ellipses as colorful glows, then add small
+        translucent bubbles/sparks for texture.
+        """
+        w, h = img.size
+        base = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        bd = ImageDraw.Draw(base)
+
+        # vertical multi-stop gradient
+        stops = [
+            (255, 82, 140),
+            (255, 180, 110),
+            (117, 225, 212),
+            (166, 125, 255),
+        ]
+        segs = len(stops) - 1
+        for y in range(h):
+            t = y / max(1, h - 1)
+            seg = min(segs - 1, int(t * segs))
+            local_t = t * segs - seg
+            c1 = stops[seg]
+            c2 = stops[seg + 1]
+            color = tuple(int(c1[i] * (1 - local_t) + c2[i] * local_t) for i in range(3))
+            bd.line((0, y, w, y), fill=color + (255,))
+
+        # vibrant glows (large blurred ellipses)
+        glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        glows = [
+            (int(-w * 0.15), int(-h * 0.25), int(w * 0.65), int(h * 0.45), (255, 82, 140, 160)),
+            (int(w * 0.55), int(-h * 0.15), int(w * 1.05), int(h * 0.5), (166, 125, 255, 140)),
+            (int(w * 0.18), int(h * 0.05), int(w * 0.9), int(h * 0.6), (117, 225, 212, 120)),
+            (int(-w * 0.08), int(h * 0.5), int(w * 0.45), int(h * 1.05), (255, 180, 110, 100)),
+        ]
+        for x0, y0, x1, y1, col in glows:
+            gd.ellipse((x0, y0, x1, y1), fill=col)
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=int(min(w, h) * 0.12)))
+        base = Image.alpha_composite(base, glow)
+
+        # subtle diagonal streaks: draw thin rotated translucent bands
+        bands = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        bd2 = ImageDraw.Draw(bands)
+        band_colors = [(255, 255, 255, 18), (255, 255, 255, 10)]
+        band_h = int(h * 0.08)
+        for i in range(-2, 6):
+            x = int(w * (i / 6.0))
+            bd2.rectangle((x, 0, x + int(w * 0.18), h), fill=band_colors[i % 2])
+        bands = bands.filter(ImageFilter.GaussianBlur(radius=40))
+        base = Image.alpha_composite(base, bands)
+
+        # small colorful bubbles/sparks
+        sparks = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(sparks)
+        bubble_colors = [(255, 255, 255, 60), (255, 255, 255, 36), (255, 255, 255, 18)]
+        random.seed(42)
+        for _ in range(60):
+            rx = random.randint(0, w)
+            ry = random.randint(0, h)
+            r = random.randint(6, 28)
+            col = random.choice(bubble_colors)
+            sd.ellipse((rx - r, ry - r, rx + r, ry + r), fill=col)
+        sparks = sparks.filter(ImageFilter.GaussianBlur(radius=8))
+        base = Image.alpha_composite(base, sparks)
+
+        # paste composed base onto target image in-place
+        img.paste(base, (0, 0), base)
+
     def _load_local_voices(self):
         count = 0
         for file_path in self.voice_dir.iterdir():
@@ -461,7 +531,7 @@ class AiriVoice(Star):
         h = header_height + rows * card_height + (rows - 1) * gap_y + footer_height
 
         img = Image.new("RGBA", (IMAGE_WIDTH, h), (255, 255, 255, 255))
-        self._fill_pastel_gradient(img, [(255, 244, 249), (255, 250, 239), (240, 248, 255)])
+        self._fill_pjsk_background(img)
         d = ImageDraw.Draw(img)
 
         accent = [(252, 168, 206), (142, 189, 255), (117, 225, 212), (202, 153, 255)]
@@ -619,7 +689,7 @@ class AiriVoice(Star):
         height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
 
         img = Image.new("RGBA", (width, height), IMAGE_BG_COLOR_TOP)
-        self._fill_pastel_gradient(img, [(255, 244, 249), (255, 250, 239), (240, 248, 255)])
+        self._fill_pjsk_background(img)
 
         # decorative background
         bg_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
