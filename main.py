@@ -17,7 +17,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 ALLOWED_EXT = {".mp3", ".wav", ".ogg", ".silk", ".amr"}
 PAGE_SIZE = 15
-IMAGE_PAGE_SIZE = 40          # 图片模式每页显示数量
+IMAGE_PAGE_SIZE = 42          # 图片模式每页显示数量
 FONT_SIZE = 28
 IMAGE_WIDTH = 1360
 IMAGE_BG_COLOR_TOP = (252, 248, 255)
@@ -576,15 +576,13 @@ class AiriVoice(Star):
                 "可用命令",
                 [
                     "/voice.list [页码] - 查看可用语音列表",
+                    "随机语音 - 随机发送一条语音",
+                    "/voice.help - 显示此帮助",
                 ],
-                (96, 165, 250),
+                (45, 212, 191),
             ),
+        ]
 
-            # transparent header with subtle outline
-            header = Image.new("RGBA", (IMAGE_WIDTH, h), (0, 0, 0, 0))
-            hd = ImageDraw.Draw(header)
-            hd.rounded_rectangle((38, 30, IMAGE_WIDTH - 38, 150), radius=36, fill=(255, 255, 255, 0), outline=(255, 255, 255, 110), width=2)
-            img = Image.alpha_composite(img, header)
         if is_admin:
             sections.append(("管理员命令", [
                 "/voice.add 名字 - 引用语音消息添加新语音",
@@ -610,18 +608,28 @@ class AiriVoice(Star):
         for _, items, _ in sections:
             wrapped_lines: List[str] = []
             for item in items:
+                wrapped_lines.extend(self._wrap_text_lines(temp_draw, item, body_font, card_width - 52))
+            wrapped_sections.append(wrapped_lines)
+            card_height = card_padding_y * 2 + section_title_height + 14 + len(wrapped_lines) * card_line_height + max(0, len(wrapped_lines) - 1) * 2
+            card_heights.append(card_height)
+
+        header_height = 156
         footer_height = 84
-                d.rounded_rectangle((x1 + 3, y1 + 5, x2 + 3, y2 + 5), radius=28, fill=(255, 255, 255, 72))
-                d.rounded_rectangle((x1, y1, x2, y2), radius=28, fill=(255, 255, 255, 255), outline=(223, 228, 241, 255), width=1)
-                d.rounded_rectangle((x1, y1, x1 + 6, y2), radius=6, fill=ac)
-                d.ellipse((x1 + 22, y1 + 25, x1 + 54, y1 + 57), fill=(ac[0], ac[1], ac[2], 44))
-                d.text((x1 + 72, y1 + 20), name, font=bf, fill=IMAGE_TEXT_COLOR)
-                d.text((x1 + 72, y1 + 50), "直接输入关键词即可发送", font=hf, fill=(124, 138, 161))
         gap_between_cards = gap_y
         height = header_height + sum(card_heights) + gap_between_cards * (len(card_heights) - 1) + footer_height
 
-        img = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+        img = Image.new("RGBA", (width, height), IMAGE_BG_COLOR_TOP)
         self._fill_pastel_gradient(img, [(255, 244, 249), (255, 250, 239), (240, 248, 255)])
+
+        # decorative background
+        bg_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        bgd = ImageDraw.Draw(bg_overlay)
+        bgd.ellipse((-120, -110, 340, 350), fill=(244, 114, 182, 68))
+        bgd.ellipse((width - 390, 10, width + 70, 470), fill=(45, 212, 191, 64))
+        bgd.ellipse((width * 0.26, -120, width * 0.64, 170), fill=(168, 85, 247, 44))
+        bgd.ellipse((width * 0.62, 44, width * 0.96, 310), fill=(96, 165, 250, 52))
+        bgd.ellipse((40, height - 240, 360, height + 80), fill=(251, 191, 36, 34))
+        img = Image.alpha_composite(img, bg_overlay)
 
         draw = ImageDraw.Draw(img)
 
@@ -638,15 +646,13 @@ class AiriVoice(Star):
         draw.text((70, 94), "一张图快速看懂如何使用、分页和管理语音", font=subtitle_font, fill=(106, 122, 147))
 
         pill_y = 50
-        pill_specs = [
+        pill_entries = [
             ("状态", "已就绪", (255, 241, 246), (245, 99, 170), 210),
             ("模式", self.trigger_mode, (236, 249, 255), (70, 154, 244), 168),
         ]
-
         x_right = width - 68
         gap_between = 14
-        pill_height = 48
-        for label, value, pill_bg, pill_fg, pill_w in reversed(pill_specs):
+        for label, value, pill_bg, pill_fg, pill_w in reversed(pill_entries):
             x0 = x_right - pill_w
             x1 = x_right
             value_font = self._load_image_font(18, bold=True)
@@ -655,27 +661,25 @@ class AiriVoice(Star):
             label_h = label_box[3] - label_box[1]
             value_h = value_box[3] - value_box[1]
             value_w = value_box[2] - value_box[0]
-            draw.rounded_rectangle((x0, pill_y, x1, pill_y + pill_height), radius=24, fill=pill_bg)
-            draw.text((x0 + 12, pill_y + (pill_height - label_h) / 2 - 1), label, font=subtitle_font, fill=(101, 116, 139))
-            draw.text((x1 - value_w - 12, pill_y + (pill_height - value_h) / 2 - 1), str(value), font=value_font, fill=pill_fg)
+            draw.rounded_rectangle((x0, pill_y, x1, pill_y + 48), radius=24, fill=pill_bg)
+            draw.text((x0 + 12, pill_y + (48 - label_h) / 2 - 1), label, font=subtitle_font, fill=(101, 116, 139))
+            draw.text((x1 - value_w - 12, pill_y + (48 - value_h) / 2 - 1), str(value), font=value_font, fill=pill_fg)
             x_right = x0 - gap_between
 
         section_y = top_y
         section_bg_colors = [(255, 255, 255, 255)] * 5
-
         for index, ((section_title, _, accent), wrapped_lines, card_height, card_bg) in enumerate(zip(sections, wrapped_sections, card_heights, section_bg_colors)):
             y1 = section_y
             y2 = y1 + card_height
-            # cleaner card, remove heavy shadow and full-height stripe
             draw.rounded_rectangle((card_x, y1, card_x + card_width, y2), radius=28, fill=(255, 255, 255, 255), outline=(223, 228, 241, 255), width=1)
-            # try to load user-provided larger badge (psc2.png) and paste with highlight
+            draw.rounded_rectangle((card_x, y1, card_x + 6, y2), radius=6, fill=accent)
+            # try to load user-provided larger badge (psc2.png)
             try:
                 badge_path2 = self.plugin_dir / "psc2.png"
                 with Image.open(badge_path2) as _bi2:
                     badge_img2 = _bi2.convert("RGBA")
                     badge_size2 = 44
                     badge_resized2 = badge_img2.resize((badge_size2, badge_size2), Image.LANCZOS)
-                    # enlarge and nudge a bit to keep padding consistent
                     paste_x = card_x + 18
                     paste_y = y1 + 18
                     img.paste(badge_resized2, (paste_x, paste_y), badge_resized2)
@@ -684,17 +688,14 @@ class AiriVoice(Star):
                 badge_cy = y1 + (card_height // 2)
                 badge_r = 22
                 draw.ellipse((badge_cx - badge_r, badge_cy - badge_r, badge_cx + badge_r, badge_cy + badge_r), fill=(accent[0], accent[1], accent[2], 255))
-            icon_box = (card_x + 18, y1 + 18, card_x + 18 + badge_size2, y1 + 18 + badge_size2)
             draw.text((card_x + 70, y1 + 20), section_title, font=section_title_font, fill=(30, 41, 59))
             text_y = y1 + 64
-            # use a colored bullet with ~80% opacity for better visibility
             bullet_fill = (accent[0], accent[1], accent[2], int(255 * 0.8))
             for line in wrapped_lines:
                 if not line:
                     text_y += 8
                     continue
-                dot_box = (card_x + 72, text_y + 10, card_x + 82, text_y + 20)
-                draw.ellipse(dot_box, fill=bullet_fill)
+                draw.ellipse((card_x + 72, text_y + 10, card_x + 82, text_y + 20), fill=bullet_fill)
                 draw.text((card_x + 94, text_y), line, font=body_font, fill=IMAGE_TEXT_COLOR)
                 text_y += card_line_height
             section_y = y2 + gap_between_cards
