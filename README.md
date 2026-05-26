@@ -51,6 +51,8 @@ https://vocalremover.org/zh/cutter
 ---
 
 ## 🎮 使用指南
+输入/voice.help获取说明：
+<img width="1360" height="1220" alt="ea24bd41e4f7faf17f42d6a6c75599d6" src="https://github.com/user-attachments/assets/4a662bfe-347a-4c95-81d5-f2634f85554e" />
 
 ### 1. 触发语音
 配置好语音文件后，只需在聊天框输入对应的**关键词**即可。
@@ -66,6 +68,7 @@ https://vocalremover.org/zh/cutter
 输入 `/voice.list` 查看所有可用的语音关键词。
 *   支持分页查看：`/voice.list 2`
 *   自动统计总数与页码，清晰易读。
+<img width="1360" height="2318" alt="64bebc3362e9a3729979a3f9a0459cfe" src="https://github.com/user-attachments/assets/4d0708dc-aae4-4693-933c-e97727ab6dff" />
 
 ### 3. 触发模式切换
 在插件配置页面可调整触发逻辑，避免日常聊天误触：
