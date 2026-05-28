@@ -826,6 +826,7 @@ class AiriVoice(Star):
 
     @filter.command("voice.list")
     async def list_voices(self, event: AstrMessageEvent):
+        """列出当前可用语音，支持分页与图片模式。"""
         if not self.sorted_keys:
             yield event.plain_result("当前没有可用语音～\n将语音文件放入 voices/ 目录或通过网页上传")
             return
@@ -858,15 +859,16 @@ class AiriVoice(Star):
 
     @filter.command("voice.help")
     async def help(self, event: AstrMessageEvent):
+        """显示插件帮助图片，包含基础用法、命令和权限说明。"""
         is_admin = self._check_admin(event)
         img_path = self._create_help_image(is_admin)
         yield event.chain_result([AstrImage.fromFileSystem(str(img_path))])
 
-    # ==================== 以下所有方法完全保持不变 ====================
+    # ==================== 以下为消息处理与管理命令 ====================
 
     @filter.regex(r"^\s*.+\s*$")
     async def voice_handler(self, event: AstrMessageEvent):
-        # ... 你原来的完整代码（未做任何修改）
+        """处理普通文本触发、随机语音和前缀模式。"""
         text = (event.message_str or "").strip()
         if not text:
             return
@@ -932,6 +934,7 @@ class AiriVoice(Star):
 
     @filter.command("voice.add")
     async def voice_add(self, event: AstrMessageEvent, name: str):
+        """引用一条语音消息并将其保存为新语音。"""
         if not self._check_admin(event):
             yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
             return
@@ -968,6 +971,7 @@ class AiriVoice(Star):
 
     @filter.command("voice.delete")
     async def voice_delete(self, event: AstrMessageEvent, name: str):
+        """删除通过 /voice.add 保存到用户目录中的语音。"""
         if not self._check_admin(event):
             yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
             return
@@ -975,7 +979,9 @@ class AiriVoice(Star):
             yield event.plain_result(f"❌ 语音「{name}」不存在")
             return
         file_path = Path(self.voice_map[name])
-        if not str(file_path.resolve()).startswith(str(self.user_added_dir.resolve())):
+        try:
+            file_path.resolve().relative_to(self.user_added_dir.resolve())
+        except ValueError:
             yield event.plain_result(f"⚠️ 只能删除通过 /voice.add 添加的语音，本地 voices/ 和网页上传的文件请手动管理")
             return
         try:
@@ -987,50 +993,9 @@ class AiriVoice(Star):
             logger.error(f"[AiriVoice] 删除语音失败：{e}")
             yield event.plain_result(f"❌ 删除失败：{str(e)}")
 
-    @filter.command("voice.list")
-    async def list_voices(self, event: AstrMessageEvent):
-        if not self.sorted_keys:
-            yield event.plain_result("当前没有可用语音～\n将语音文件放入 voices/ 目录或通过网页上传")
-            return
-        args = (event.message_str or "").strip().split()
-        page = max(1, int(args[1])) if len(args) > 1 and args[1].isdigit() else 1
-        total = len(self.sorted_keys)
-        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
-        if page > total_pages:
-            yield event.plain_result(f"页码过大～总共 {total_pages} 页")
-            return
-        start = (page - 1) * PAGE_SIZE
-        page_keys = self.sorted_keys[start:start + PAGE_SIZE]
-        msg = f"📋 可用语音（第 {page}/{total_pages} 页，共 {total} 个）：\n\n"
-        msg += "\n".join(f"• {k}" for k in page_keys)
-        if total_pages > 1:
-            nav = []
-            if page > 1:
-                nav.append(f"/voice.list {page-1} ← 上一页")
-            if page < total_pages:
-                nav.append(f"/voice.list {page+1} → 下一页")
-            msg += "\n\n" + " | ".join(nav)
-        yield event.plain_result(msg)
-
-    @filter.command("voice.reload")
-    async def reload_voices(self, event: AstrMessageEvent):
-        if not self._check_admin(event):
-            yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
-            return
-        self._load_local_voices()
-        self._load_web_voices(self.config)
-        self._update_sorted_keys()
-        self.last_pool_len = len(self.config.get("extra_voice_pool", []))
-        yield event.plain_result(f"✅ 已重新加载，共 {len(self.voice_map)} 个语音")
-
-    @filter.command("voice.help")
-    async def help(self, event: AstrMessageEvent):
-        is_admin = self._check_admin(event)
-        img_path = self._create_help_image(is_admin)
-        yield event.chain_result([AstrImage.fromFileSystem(str(img_path))])
-
     @filter.command("voice.check")
     async def check_permission(self, event: AstrMessageEvent):
+        """查看当前用户是否拥有执行管理命令的权限。"""
         is_admin = self._check_admin(event)
         user_id = self._get_user_id(event) or "未知"
         msg = f"🔐 权限检查\n\n"
@@ -1047,6 +1012,7 @@ class AiriVoice(Star):
 
     @filter.on_decorating_result()
     async def on_bot_reply_auto_voice(self, event: AstrMessageEvent):
+        """在 bot 回复文本中命中语音关键词时自动追加语音。"""
         if not self.auto_reply_voice_enabled:
             return
 
