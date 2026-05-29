@@ -271,7 +271,9 @@ class AiriVoice(Star):
         try:
             async with aiohttp.ClientSession() as client:
                 response = await client.get(url)
-                return await response.read()
+                data = await response.read()
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                return data, content_type
         except Exception as e:
             logger.error(f"[AiriVoice] 下载音频失败：{e}")
             return None
@@ -953,11 +955,26 @@ class AiriVoice(Star):
             yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
             return
         logger.debug(f"[AiriVoice] 获取到音频 URL: {audio_url}")
-        audio_data = await self._download_audio(audio_url)
-        if not audio_data:
+        res = await self._download_audio(audio_url)
+        if not res:
             yield event.plain_result("❌ 音频下载失败，请稍后重试")
             return
+        audio_data, content_type = res
+
+        # 优先根据响应的 Content-Type 判断扩展名，避免 URL 无扩展名或扩展不准确导致保存错误
         ext = self._get_file_ext_from_url(audio_url)
+        if content_type:
+            if "silk" in content_type:
+                ext = ".silk"
+            elif "wav" in content_type or "wave" in content_type or "audio/x-wav" in content_type:
+                ext = ".wav"
+            elif "ogg" in content_type:
+                ext = ".ogg"
+            elif "amr" in content_type:
+                ext = ".amr"
+            elif "mpeg" in content_type or "mp3" in content_type:
+                ext = ".mp3"
+
         file_path = self.user_added_dir / f"{name}{ext}"
         try:
             with open(file_path, "wb") as f:
