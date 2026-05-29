@@ -46,7 +46,7 @@
   "llm_select_mode": {
     "description": "LLM 语音选择模式",
     "type": "string",
-    "hint": "list: 先列出全部语音供 LLM 选择；keyword: LLM 根据用户给出的关键词筛选语音",
+    "hint": "list/keyword 为 LLM 选择语音的偏好策略提示。插件仍会同时提供 list/search/random/send 工具，LLM 可按需调用。",
     "default": "list",
     "options": ["list", "keyword"]
   }
