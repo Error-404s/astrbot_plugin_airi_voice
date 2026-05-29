@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+import asyncio
 import json
 import re
 import random
@@ -45,6 +46,27 @@ def _extract_send_context(wrapper: Any):
         if event is not None and agent_ctx is not None:
             break
     return agent_ctx, event
+
+def _is_timeout_error(e: Exception) -> bool:
+    if isinstance(e, TimeoutError):
+        return True
+    msg = str(e).lower()
+    return "timed out" in msg or "timeout" in msg
+
+async def _send_message_with_retry(agent_ctx: Any, origin: Any, chain: MessageChain, max_attempts: int = 3) -> None:
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await agent_ctx.send_message(origin, chain)
+            return
+        except Exception as e:
+            last_exc = e
+            if _is_timeout_error(e) and attempt < max_attempts:
+                await asyncio.sleep(0.6 * attempt)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
 
 
 @dataclass
@@ -223,7 +245,8 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
         if agent_ctx is None or event is None:
             return _tool_json({"error": "missing_context", "name": name, "message": f"无法获取当前会话上下文，未能发送语音「{name}」。"})
         try:
-            await agent_ctx.send_message(
+            await _send_message_with_retry(
+                agent_ctx,
                 event.unified_msg_origin,
                 MessageChain([Record.fromFileSystem(path)]),
             )
@@ -234,6 +257,9 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
             logger.error(f"[AiriVoice] 文件不存在（LLM 工具） '{name}': {e}")
             return _tool_json({"error": "file_not_found", "name": name, "message": f"语音文件不存在：{name}"})
         except Exception as e:
+            if _is_timeout_error(e):
+                logger.error(f"[AiriVoice] LLM 工具发送超时 '{name}': {e}")
+                return _tool_json({"error": "send_timeout", "name": name, "message": "语音发送超时，请稍后重试。"})
             logger.error(f"[AiriVoice] LLM 工具发送失败 '{name}': {e}")
             return _tool_json({"error": "send_failed", "name": name, "message": f"语音发送失败：{type(e).__name__}"})
 
@@ -280,7 +306,8 @@ class AiriSendRandomVoiceTool(FunctionTool[AstrAgentContext]):
         if agent_ctx is None or event is None:
             return _tool_json({"error": "missing_context", "name": name, "message": f"无法获取当前会话上下文，未能发送语音「{name}」。"})
         try:
-            await agent_ctx.send_message(
+            await _send_message_with_retry(
+                agent_ctx,
                 event.unified_msg_origin,
                 MessageChain([Record.fromFileSystem(path)]),
             )
@@ -294,6 +321,9 @@ class AiriSendRandomVoiceTool(FunctionTool[AstrAgentContext]):
             logger.error(f"[AiriVoice] 文件不存在（LLM 工具） '{name}': {e}")
             return _tool_json({"error": "file_not_found", "name": name, "message": f"语音文件不存在：{name}"})
         except Exception as e:
+            if _is_timeout_error(e):
+                logger.error(f"[AiriVoice] LLM 工具发送超时 '{name}': {e}")
+                return _tool_json({"error": "send_timeout", "name": name, "message": "语音发送超时，请稍后重试。"})
             logger.error(f"[AiriVoice] LLM 工具发送失败 '{name}': {e}")
             return _tool_json({"error": "send_failed", "name": name, "message": f"语音发送失败：{type(e).__name__}"})
 
