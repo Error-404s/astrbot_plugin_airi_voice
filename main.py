@@ -277,11 +277,16 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
         if not name:
             return _tool_json({"error": "invalid_name", "message": "请提供要发送的语音名称。"})
         resolved_name, suggestions = _resolve_voice_name(name, self.plugin.voice_map)
+        auto_corrected = False
         if not resolved_name:
-            payload = {"error": "voice_not_found", "name": name, "message": f"语音「{name}」不存在，请先使用列出/搜索工具确认可用名称。"}
-            if suggestions:
-                payload["suggestions"] = suggestions
-            return _tool_json(payload)
+            if len(suggestions) == 1:
+                resolved_name = suggestions[0]
+                auto_corrected = True
+            else:
+                payload = {"error": "voice_not_found", "name": name, "message": f"语音「{name}」不存在，请先使用列出/搜索工具确认可用名称。"}
+                if suggestions:
+                    payload["suggestions"] = suggestions
+                return _tool_json(payload)
         path = self.plugin.voice_map.get(resolved_name)
         if not path:
             return _tool_json({"error": "voice_not_found", "name": resolved_name, "message": f"语音「{resolved_name}」不存在，请先使用列出/搜索工具确认可用名称。"})
@@ -299,6 +304,8 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
             payload = {"sent": resolved_name}
             if resolved_name != name:
                 payload["alias"] = name
+            if auto_corrected:
+                payload["auto_corrected"] = True
             return _tool_json(payload)
         except FileNotFoundError as e:
             logger.error(f"[AiriVoice] 文件不存在（LLM 工具） '{resolved_name}': {e}")
