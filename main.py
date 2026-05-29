@@ -49,7 +49,7 @@ def _fuzzy_suggest(keyword: str, choices: List[str], limit: int = 5, cutoff: flo
     scored.sort(key=lambda x: (-x[0], x[1]))
     return [c for r, c in scored if r >= cutoff][:limit]
 
-def _resolve_voice_name(raw_name: str, voice_map: Dict[str, str]):
+def _resolve_voice_name(raw_name: str, voice_map: Dict[str, str]) -> tuple[Optional[str], List[str]]:
     if raw_name in voice_map:
         return raw_name, []
     keys = list(voice_map.keys())
