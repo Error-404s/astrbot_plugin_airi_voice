@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+import json
 import re
 import random
 import aiohttp
@@ -75,13 +76,19 @@ class AiriListAllVoicesTool(FunctionTool[AstrAgentContext]):
         total = len(names)
         total_pages = max(1, (total + page_size - 1) // page_size)
         if page > total_pages:
-            return f"页码过大，总共 {total_pages} 页。"
+            return json.dumps(
+                {"error": "page_out_of_range", "total_pages": total_pages},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
 
         start = (page - 1) * page_size
         end = start + page_size
         page_names = names[start:end]
-        header = f"当前可用语音名称列表（第 {page}/{total_pages} 页，共 {total} 个）：\n"
-        return header + "\n".join(page_names)
+        payload = {"total": total, "names": page_names}
+        if total_pages > 1:
+            payload.update({"page": page, "total_pages": total_pages})
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 @dataclass
@@ -155,12 +162,18 @@ class AiriSearchVoicesTool(FunctionTool[AstrAgentContext]):
         total = len(matched_names)
         total_pages = max(1, (total + page_size - 1) // page_size)
         if page > total_pages:
-            return f"页码过大，总共 {total_pages} 页。"
+            return json.dumps(
+                {"error": "page_out_of_range", "total_pages": total_pages},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         start = (page - 1) * page_size
         end = start + page_size
         page_names = matched_names[start:end]
-        header = f"根据关键词「{keyword}」筛选到的语音名称（第 {page}/{total_pages} 页，共 {total} 个）：\n"
-        return header + "\n".join(page_names)
+        payload = {"keyword": keyword, "total": total, "names": page_names}
+        if total_pages > 1:
+            payload.update({"page": page, "total_pages": total_pages})
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 @dataclass
@@ -217,7 +230,7 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
             )
             logger.debug(f"[AiriVoice] LLM 工具发送语音：'{name}' → {path}")
             setattr(event, "__airi_voice_sent_by_tool__", True)
-            return f"已发送语音：{name}"
+            return json.dumps({"sent": name}, ensure_ascii=False, separators=(",", ":"))
         except FileNotFoundError as e:
             logger.error(f"[AiriVoice] 文件不存在（LLM 工具） '{name}': {e}")
             return f"语音文件不存在：{name}"
