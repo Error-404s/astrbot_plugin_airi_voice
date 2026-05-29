@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import asyncio
+import difflib
 import json
 import re
 import random
@@ -28,6 +29,25 @@ IMAGE_TEXT_COLOR = (44, 51, 74)
 
 def _tool_json(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+def _normalize_for_match(text: str) -> str:
+    if text is None:
+        return ""
+    s = str(text).strip().lower()
+    s = re.sub(r"[\s`~!@#$%^&*()\-=+[\]{}\\|;:'\",.<>/?，。！？：；“”‘’（）【】《》、·…]+", "", s)
+    return s
+
+def _fuzzy_suggest(keyword: str, choices: List[str], limit: int = 5, cutoff: float = 0.45) -> List[str]:
+    kw = _normalize_for_match(keyword)
+    scored = []
+    for c in choices:
+        cc = _normalize_for_match(c)
+        if not cc:
+            continue
+        r = difflib.SequenceMatcher(None, kw, cc).ratio()
+        scored.append((r, c))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [c for r, c in scored if r >= cutoff][:limit]
 
 def _extract_send_context(wrapper: Any):
     agent_ctx = None
@@ -195,7 +215,11 @@ class AiriSearchVoicesTool(FunctionTool[AstrAgentContext]):
                     rank = 2
                 matched.append((rank, name))
         if not matched:
-            return _tool_json({"error": "not_found", "keyword": keyword, "message": f"未找到包含「{keyword}」的语音名称。"})
+            suggestions = _fuzzy_suggest(keyword, list(self.plugin.voice_map.keys()))
+            payload = {"error": "not_found", "keyword": keyword, "message": f"未找到包含「{keyword}」的语音名称。"}
+            if suggestions:
+                payload["suggestions"] = suggestions
+            return _tool_json(payload)
         matched.sort(key=lambda x: (x[0], x[1]))
         matched_names = [name for _, name in matched]
         total = len(matched_names)
