@@ -871,6 +871,9 @@ class AiriVoice(Star):
     @filter.regex(r"^\s*.+\s*$")
     async def voice_handler(self, event: AstrMessageEvent):
         """处理普通文本触发、随机语音和前缀模式。"""
+        # LLM 模式下由大模型工具调用处理，此处不做任何关键词匹配，避免与工具流冲突
+        if self.trigger_mode == "llm":
+            return
         text = (event.message_str or "").strip()
         if not text:
             return
@@ -1031,6 +1034,9 @@ class AiriVoice(Star):
     async def on_bot_reply_auto_voice(self, event: AstrMessageEvent):
         """在 bot 回复文本中命中语音关键词时自动追加语音。"""
         if not self.auto_reply_voice_enabled:
+            return
+        # LLM 模式下语音已由 AiriSendVoiceTool 主动发送，避免再次追加造成重复
+        if self.trigger_mode == "llm":
             return
 
         result = event.get_result()
