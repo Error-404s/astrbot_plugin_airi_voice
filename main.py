@@ -129,6 +129,8 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
                 MessageChain([Record.fromFileSystem(path)]),
             )
             logger.debug(f"[AiriVoice] LLM 工具发送语音：'{name}' → {path}")
+            # 打上本轮标记，告知后续装饰器此次对话已由工具主动发送过语音
+            setattr(event, "__airi_voice_sent_by_tool__", True)
             return ""
         except FileNotFoundError as e:
             logger.error(f"[AiriVoice] 文件不存在（LLM 工具） '{name}': {e}")
@@ -1035,8 +1037,9 @@ class AiriVoice(Star):
         """在 bot 回复文本中命中语音关键词时自动追加语音。"""
         if not self.auto_reply_voice_enabled:
             return
-        # LLM 模式下语音已由 AiriSendVoiceTool 主动发送，避免再次追加造成重复
-        if self.trigger_mode == "llm":
+        # 动态判定：本轮对话工具已成功发过语音时才跳过，否则照常允许文本命中追加
+        if getattr(event, "__airi_voice_sent_by_tool__", False):
+            logger.debug("[AiriVoice-auto] 本轮对话工具已发过语音，跳过自动追加")
             return
 
         result = event.get_result()
