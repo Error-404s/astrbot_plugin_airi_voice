@@ -1435,6 +1435,10 @@ class AiriVoice(Star):
                         if len(suggestions) == 1:
                             candidates = suggestions
                         else:
+                            if suggestions:
+                                yield event.plain_result("找到多个相似语音：" + "、".join(suggestions) + "，请发送更精确的指令")
+                                if hasattr(event, "should_call_llm"):
+                                    event.should_call_llm(False)
                             return
                     name = random.choice(candidates)
                     matched_path = self.voice_map.get(name)
