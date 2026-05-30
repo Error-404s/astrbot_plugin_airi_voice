@@ -44,6 +44,34 @@ def _tool_err(code: str, message: str, meta: Optional[dict] = None) -> str:
         payload["error"]["meta"] = meta
     return _tool_json(payload)
 
+def _llm_voice_limit(plugin: Any) -> int:
+    try:
+        v = int(getattr(plugin, "llm_max_voices_per_request", 0) or 0)
+    except Exception:
+        v = 0
+    return max(0, v)
+
+def _llm_voice_used(event: Any) -> int:
+    try:
+        v = int(getattr(event, "__airi_llm_voice_sent_count__", 0) or 0)
+    except Exception:
+        v = 0
+    return max(0, v)
+
+def _llm_voice_remaining(plugin: Any, event: Any) -> tuple[int, int, int]:
+    limit = _llm_voice_limit(plugin)
+    used = _llm_voice_used(event)
+    if limit <= 0:
+        return limit, used, 2**31 - 1
+    return limit, used, max(0, limit - used)
+
+def _llm_voice_incr(event: Any, n: int = 1) -> None:
+    try:
+        used = _llm_voice_used(event)
+        setattr(event, "__airi_llm_voice_sent_count__", used + max(0, int(n)))
+    except Exception:
+        pass
+
 _LLM_TOOL_NAMES = {
     "airi_list_all_voices",
     "airi_search_voices",
@@ -373,6 +401,9 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
         agent_ctx, event = _extract_send_context(context)
         if agent_ctx is None or event is None:
             return _tool_err("missing_context", f"无法获取当前会话上下文，未能发送语音「{resolved_name}」。", {"name": resolved_name})
+        limit, used, remaining = _llm_voice_remaining(self.plugin, event)
+        if limit > 0 and remaining < 1:
+            return _tool_err("quota_exceeded", "已达到本次请求语音发送上限。", {"limit": limit, "sent": used})
         try:
             await _send_message_with_retry(
                 agent_ctx,
@@ -381,6 +412,7 @@ class AiriSendVoiceTool(FunctionTool[AstrAgentContext]):
             )
             logger.debug(f"[AiriVoice] LLM 工具发送语音：'{resolved_name}' → {path}")
             setattr(event, "__airi_voice_sent_by_tool__", True)
+            _llm_voice_incr(event, 1)
             payload: dict = {"sent": resolved_name}
             if resolved_name != name:
                 payload["alias"] = name
@@ -439,6 +471,9 @@ class AiriSendRandomVoiceTool(FunctionTool[AstrAgentContext]):
         agent_ctx, event = _extract_send_context(context)
         if agent_ctx is None or event is None:
             return _tool_err("missing_context", f"无法获取当前会话上下文，未能发送语音「{name}」。", {"name": name})
+        limit, used, remaining = _llm_voice_remaining(self.plugin, event)
+        if limit > 0 and remaining < 1:
+            return _tool_err("quota_exceeded", "已达到本次请求语音发送上限。", {"limit": limit, "sent": used})
         try:
             await _send_message_with_retry(
                 agent_ctx,
@@ -447,6 +482,7 @@ class AiriSendRandomVoiceTool(FunctionTool[AstrAgentContext]):
             )
             logger.debug(f"[AiriVoice] LLM 工具随机发送语音：'{name}' → {path}")
             setattr(event, "__airi_voice_sent_by_tool__", True)
+            _llm_voice_incr(event, 1)
             payload: dict = {"sent": name, "random": True}
             if keyword:
                 payload["keyword"] = keyword
@@ -495,11 +531,15 @@ class AiriSendVoicesTool(FunctionTool[AstrAgentContext]):
         if agent_ctx is None or event is None:
             return _tool_err("missing_context", "无法获取当前会话上下文，未能批量发送语音。")
 
+        limit, used, remaining = _llm_voice_remaining(self.plugin, event)
         results: List[dict] = []
         for raw in names:
             raw_name = str(raw or "").strip()
             if not raw_name:
                 results.append({"ok": False, "error": {"code": "invalid_name", "message": "语音名称为空。"}})
+                continue
+            if limit > 0 and remaining < 1:
+                results.append({"ok": False, "error": {"code": "quota_exceeded", "message": "已达到本次请求语音发送上限。", "meta": {"limit": limit, "sent": used}}})
                 continue
 
             resolved_name, suggestions = _resolve_voice_name(raw_name, self.plugin.voice_map)
@@ -527,6 +567,10 @@ class AiriSendVoicesTool(FunctionTool[AstrAgentContext]):
                     MessageChain([Record.fromFileSystem(path)]),
                 )
                 setattr(event, "__airi_voice_sent_by_tool__", True)
+                if limit > 0:
+                    used += 1
+                    remaining = max(0, limit - used)
+                    _llm_voice_incr(event, 1)
                 item: dict = {"ok": True, "data": {"sent": resolved_name}}
                 if resolved_name != raw_name:
                     item["data"]["alias"] = raw_name
@@ -594,6 +638,13 @@ class AiriVoice(Star):
         self.llm_tools_inject_mode = self.config.get("llm_tools_inject_mode", "always")
         if self.llm_tools_inject_mode not in {"always", "on_demand"}:
             self.llm_tools_inject_mode = "always"
+
+        try:
+            self.llm_max_voices_per_request = int(self.config.get("llm_max_voices_per_request", 2) or 0)
+        except Exception:
+            self.llm_max_voices_per_request = 2
+        if self.llm_max_voices_per_request < 0:
+            self.llm_max_voices_per_request = 0
 
         self.auto_reply_voice_enabled = self.config.get("auto_reply_voice_on_bot_message", False)
         self.list_as_image = self.config.get("list_as_image", False)   # ← 新增

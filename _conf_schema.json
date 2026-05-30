@@ -56,5 +56,11 @@
     "hint": "always: 每次对话都注入语音工具（更稳定但更耗 token）；on_demand: 仅当用户消息像“发语音/随机/语音列表”等请求时注入，可显著降低输入 token",
     "default": "always",
     "options": ["always", "on_demand"]
+  },
+  "llm_max_voices_per_request": {
+    "description": "LLM 单次语音发送上限",
+    "type": "int",
+    "default": 2,
+    "hint": "限制一次 LLM 工具调用链路中最多发送的语音条数（防刷屏/限速）。设为 0 表示不限制。"
   }
 }
