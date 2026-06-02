@@ -5,6 +5,7 @@ import difflib
 import json
 import re
 import random
+import shutil
 import tempfile
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -776,15 +777,38 @@ class AiriVoice(Star):
             return ".mp3"
         return ".mp3"
 
+    def _detect_audio_kind(self, audio_data: bytes, guessed_ext: str) -> tuple[str, bytes, str]:
+        # QQ 语音有时会在 silk 头前带 1 字节前缀（例如 0x02），这里自动剥离后再解码。
+        silk_magic = b"#!SILK_V3"
+        idx = audio_data.find(silk_magic)
+        if idx >= 0:
+            note = ""
+            normalized = audio_data[idx:]
+            if idx > 0:
+                note = f"检测到 silk 头前缀 {idx} 字节，已自动剥离"
+            return ".silk", normalized, note
+
+        if audio_data.startswith(b"#!AMR\n") or audio_data.startswith(b"#!AMR-WB\n"):
+            return ".amr", audio_data, ""
+
+        return guessed_ext, audio_data, ""
+
     def _find_silk_decoder(self) -> Optional[Path]:
         candidates = []
         configured = self.config.get("silk_decoder_path")
         if isinstance(configured, str) and configured.strip():
             candidates.append(Path(configured.strip()))
+        for cmd in ("decoder", "decoder.exe"):
+            p = shutil.which(cmd)
+            if p:
+                candidates.append(Path(p))
         candidates.extend([
             self.plugin_dir / "silk" / "decoder",
+            self.plugin_dir / "silk" / "decoder.exe",
             self.plugin_dir / "silk_v3_decoder" / "decoder",
+            self.plugin_dir / "silk_v3_decoder" / "decoder.exe",
             self.data_dir / "silk" / "decoder",
+            self.data_dir / "silk" / "decoder.exe",
         ])
         for candidate in candidates:
             try:
@@ -840,8 +864,6 @@ class AiriVoice(Star):
                     "-vn",
                     "-sn",
                     "-dn",
-                    "-ac", "1",
-                    "-ar", "24000",
                     "-c:a", "pcm_s16le",
                     str(wav_path),
                 )
@@ -1536,12 +1558,22 @@ class AiriVoice(Star):
             return
         audio_data, content_type = res
 
-        source_ext = self._guess_audio_ext(audio_url, content_type)
-        converted, target_ext, convert_err = await self._convert_audio_for_add(audio_data, source_ext)
+        guessed_ext = self._guess_audio_ext(audio_url, content_type)
+        source_ext, normalized_data, detect_note = self._detect_audio_kind(audio_data, guessed_ext)
+        if detect_note:
+            logger.info(f"[AiriVoice] {detect_note}")
+
+        converted, target_ext, convert_err = await self._convert_audio_for_add(normalized_data, source_ext)
         if converted is None:
-            logger.warning(f"[AiriVoice] 语音转码失败，将保留原始格式：{convert_err}")
-            converted = audio_data
-            target_ext = source_ext
+            logger.warning(f"[AiriVoice] 语音转码失败：{convert_err}")
+            if source_ext == ".silk":
+                yield event.plain_result(
+                    "❌ 语音添加失败：检测到 Silk 语音但无法完成解码转码。\n"
+                    "请在插件目录放置 `silk/decoder(.exe)`，或在配置中填写 `silk_decoder_path` 后重试。"
+                )
+                return
+            yield event.plain_result(f"❌ 语音转码失败：{convert_err}")
+            return
 
         file_path = self.user_added_dir / f"{name}{target_ext}"
         try:
@@ -1549,10 +1581,13 @@ class AiriVoice(Star):
                 f.write(converted)
             self.voice_map[name] = str(file_path)
             self._update_sorted_keys()
-            if target_ext == ".wav":
-                yield event.plain_result(f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{target_ext}\n💾 大小：{len(converted) / 1024:.2f} KB\n🎧 已使用 ffmpeg 转为无损 WAV")
-            else:
-                yield event.plain_result(f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{target_ext}\n💾 大小：{len(converted) / 1024:.2f} KB\n⚠️ 未找到 silk decoder，已保留原始格式")
+            extra = ""
+            if detect_note:
+                extra = f"\nℹ️ {detect_note}"
+            yield event.plain_result(
+                f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{target_ext}\n"
+                f"💾 大小：{len(converted) / 1024:.2f} KB\n🎧 已使用 ffmpeg 转为无损 WAV{extra}"
+            )
         except Exception as e:
             logger.error(f"[AiriVoice] 保存语音失败：{e}")
             yield event.plain_result(f"❌ 保存语音失败：{str(e)}")
