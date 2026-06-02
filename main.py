@@ -1471,94 +1471,94 @@ class AiriVoice(Star):
 
 
     @filter.command("voice.add")
-async def voice_add(self, event: AstrMessageEvent, name: str):
-    """引用一条语音消息并将其保存为新语音（保留原始音质）。"""
-    # 权限校验
-    if not self._check_admin(event):
-        yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
-        return
-    
-    # 检查是否引用了消息
-    if not self._get_reply_id(event):
-        yield event.plain_result("❌ 请引用一条语音消息后再使用此命令")
-        return
-    
-    # 检查名称有效性
-    if not name or not name.strip():
-        yield event.plain_result("❌ 请提供语音名称，例如：/voice.add 打卡啦摩托")
-        return
-    name = name.strip()
-    
-    # 检查重名
-    if name in self.voice_map:
-        yield event.plain_result(f"⚠️ 语音「{name}」已存在，如需覆盖请先删除旧语音")
-        return
-    
-    # 获取语音源（本地路径或URL）
-    source_info = await self._get_audio_path_or_url(event)
-    if not source_info:
-        yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
-        return
-    
-    source_type, source_path = source_info
-    file_ext = None
-    audio_data = None
-    
-    try:
-        if source_type == 'local':
-            # 直接复制本地文件，保留原始质量
-            file_ext = os.path.splitext(source_path)[1]
-            if not file_ext:
-                file_ext = '.silk'  # 默认扩展名（QQ语音常见格式）
-            dest_path = self.user_added_dir / f"{name}{file_ext}"
-            shutil.copy2(source_path, dest_path)  # 复制文件，保留元数据
-            # 读取数据用于显示大小
-            with open(source_path, 'rb') as f:
-                audio_data = f.read()
-            logger.info(f"[AiriVoice] 从本地复制语音: {source_path} -> {dest_path}")
-        else:  # url
-            # 下载网络音频（可能已降质，但作为兜底）
-            res = await self._download_audio(source_path)
-            if not res:
-                yield event.plain_result("❌ 音频下载失败，请稍后重试")
-                return
-            audio_data, content_type = res
+    async def voice_add(self, event: AstrMessageEvent, name: str):
+        """引用一条语音消息并将其保存为新语音（保留原始音质）。"""
+        # 权限校验
+        if not self._check_admin(event):
+            yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
+            return
+        
+        # 检查是否引用了消息
+        if not self._get_reply_id(event):
+            yield event.plain_result("❌ 请引用一条语音消息后再使用此命令")
+            return
+        
+        # 检查名称有效性
+        if not name or not name.strip():
+            yield event.plain_result("❌ 请提供语音名称，例如：/voice.add 打卡啦摩托")
+            return
+        name = name.strip()
+        
+        # 检查重名
+        if name in self.voice_map:
+            yield event.plain_result(f"⚠️ 语音「{name}」已存在，如需覆盖请先删除旧语音")
+            return
+        
+        # 获取语音源（本地路径或URL）
+        source_info = await self._get_audio_path_or_url(event)
+        if not source_info:
+            yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
+            return
+        
+        source_type, source_path = source_info
+        file_ext = None
+        audio_data = None
+        
+        try:
+            if source_type == 'local':
+                # 直接复制本地文件，保留原始质量
+                file_ext = os.path.splitext(source_path)[1]
+                if not file_ext:
+                    file_ext = '.silk'  # 默认扩展名（QQ语音常见格式）
+                dest_path = self.user_added_dir / f"{name}{file_ext}"
+                shutil.copy2(source_path, dest_path)  # 复制文件，保留元数据
+                # 读取数据用于显示大小
+                with open(source_path, 'rb') as f:
+                    audio_data = f.read()
+                logger.info(f"[AiriVoice] 从本地复制语音: {source_path} -> {dest_path}")
+            else:  # url
+                # 下载网络音频（可能已降质，但作为兜底）
+                res = await self._download_audio(source_path)
+                if not res:
+                    yield event.plain_result("❌ 音频下载失败，请稍后重试")
+                    return
+                audio_data, content_type = res
+                
+                # 根据Content-Type或URL决定扩展名
+                file_ext = self._get_file_ext_from_url(source_path)
+                if content_type:
+                    if "silk" in content_type:
+                        file_ext = ".silk"
+                    elif "wav" in content_type or "wave" in content_type:
+                        file_ext = ".wav"
+                    elif "ogg" in content_type:
+                        file_ext = ".ogg"
+                    elif "amr" in content_type:
+                        file_ext = ".amr"
+                    elif "mpeg" in content_type or "mp3" in content_type:
+                        file_ext = ".mp3"
+                
+                dest_path = self.user_added_dir / f"{name}{file_ext}"
+                with open(dest_path, "wb") as f:
+                    f.write(audio_data)
+                logger.info(f"[AiriVoice] 下载网络语音: {source_path} -> {dest_path}")
             
-            # 根据Content-Type或URL决定扩展名
-            file_ext = self._get_file_ext_from_url(source_path)
-            if content_type:
-                if "silk" in content_type:
-                    file_ext = ".silk"
-                elif "wav" in content_type or "wave" in content_type:
-                    file_ext = ".wav"
-                elif "ogg" in content_type:
-                    file_ext = ".ogg"
-                elif "amr" in content_type:
-                    file_ext = ".amr"
-                elif "mpeg" in content_type or "mp3" in content_type:
-                    file_ext = ".mp3"
+            # 更新语音映射表
+            self.voice_map[name] = str(dest_path)
+            self._update_sorted_keys()
             
-            dest_path = self.user_added_dir / f"{name}{file_ext}"
-            with open(dest_path, "wb") as f:
-                f.write(audio_data)
-            logger.info(f"[AiriVoice] 下载网络语音: {source_path} -> {dest_path}")
-        
-        # 更新语音映射表
-        self.voice_map[name] = str(dest_path)
-        self._update_sorted_keys()
-        
-        # 回复成功信息
-        size_kb = len(audio_data) / 1024 if audio_data else os.path.getsize(dest_path) / 1024
-        yield event.plain_result(
-            f"✅ 语音「{name}」添加成功！\n"
-            f"📁 文件：{name}{file_ext}\n"
-            f"💾 大小：{size_kb:.2f} KB\n"
-            f"🔊 音质：{'原始（本地复制）' if source_type == 'local' else '网络下载（可能已压缩）'}"
-        )
-        
-    except Exception as e:
-        logger.error(f"[AiriVoice] 保存语音失败：{e}")
-        yield event.plain_result(f"❌ 保存语音失败：{str(e)}")
+            # 回复成功信息
+            size_kb = len(audio_data) / 1024 if audio_data else os.path.getsize(dest_path) / 1024
+            yield event.plain_result(
+                f"✅ 语音「{name}」添加成功！\n"
+                f"📁 文件：{name}{file_ext}\n"
+                f"💾 大小：{size_kb:.2f} KB\n"
+                f"🔊 音质：{'原始（本地复制）' if source_type == 'local' else '网络下载（可能已压缩）'}"
+            )
+            
+        except Exception as e:
+            logger.error(f"[AiriVoice] 保存语音失败：{e}")
+            yield event.plain_result(f"❌ 保存语音失败：{str(e)}")
 
     @filter.command("voice.delete")
     async def voice_delete(self, event: AstrMessageEvent, name: str):
