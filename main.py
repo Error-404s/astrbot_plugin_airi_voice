@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 import asyncio
 import difflib
 import json
@@ -749,26 +749,26 @@ class AiriVoice(Star):
                     logger.error(f"[AiriVoice] 获取引用消息失败：{e}")
         return url
 
-    async def _get_audio_path_or_url(self, event: AstrMessageEvent) -> Optional[tuple[str, str]]:
+    async def _get_audio_path_or_url(self, event: AstrMessageEvent) -> Optional[Tuple[str, str]]:
         """
-        返回 (类型, 路径/URL)
-        类型: 'local' 或 'url'
+        获取语音消息的本地文件路径或网络 URL。
+        返回: ('local', 绝对路径) 或 ('url', http链接) 或 None
         """
         chain = event.get_messages()
         
-        # 1. 直接从消息段找本地路径
+        # ---------- 步骤1：直接检查当前消息段 ----------
         for seg in chain:
             if isinstance(seg, Record):
-                # 优先取本地 file/path
+                # NapCat 可能直接提供 file 或 path 字段（本地路径）
                 local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
                 if local_path and os.path.exists(local_path):
                     return ('local', local_path)
-                # 其次才取 URL
+                # 如果没有本地路径，尝试 URL
                 url = getattr(seg, 'url', None)
                 if url and url.startswith('http'):
                     return ('url', url)
         
-        # 2. 如果是回复消息，深入 reply.chain
+        # ---------- 步骤2：处理回复消息（用户引用的语音） ----------
         reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
@@ -780,23 +780,68 @@ class AiriVoice(Star):
                     if url and url.startswith('http'):
                         return ('url', url)
         
-        # 3. 回退到通过 get_msg API
-        if msg_id := self._get_reply_id(event):
+        # ---------- 步骤3：通过 get_msg API 获取消息详情 ----------
+        msg_id = self._get_reply_id(event)  # 获取引用消息的ID
+        if msg_id is None:
+            # 没有引用消息，尝试从当前消息中提取消息ID（语音消息自身）
+            # 部分事件中可能带有 message_id 属性
+            msg_id = getattr(event, 'message_id', None)
+        
+        if msg_id:
             try:
-                raw = await event.bot.get_msg(message_id=msg_id)
-                messages = raw.get("message", [])
+                # 获取原始消息结构
+                msg_detail = await event.bot.get_msg(message_id=msg_id)
+                messages = msg_detail.get('message', [])
                 for seg in messages:
-                    if isinstance(seg, dict) and seg.get("type") == "record":
-                        data = seg.get("data", {})
-                        # 检查是否有本地路径（不同协议命名不同）
-                        local_path = data.get("file") or data.get("path")
+                    if isinstance(seg, dict) and seg.get('type') == 'record':
+                        data = seg.get('data', {})
+                        # 检查本地路径（不同适配器字段名不同）
+                        local_path = data.get('file') or data.get('path')
                         if local_path and os.path.exists(local_path):
                             return ('local', local_path)
-                        url = data.get("url")
-                        if url:
+                        # 检查 URL
+                        url = data.get('url')
+                        if url and url.startswith('http'):
                             return ('url', url)
             except Exception as e:
-                logger.error(f"获取引用消息失败：{e}")
+                logger.error(f"[AiriVoice] get_msg 失败: {e}")
+        
+        # ---------- 步骤4：最终手段 —— 调用 get_record API（NapCat 专用） ----------
+        # 需要获取语音的唯一标识 file_id。通常可以从消息段或 get_msg 结果中得到。
+        # 这里我们尝试从上述流程中已经得到的 msg_id 和可能的 file_id。
+        # 注意：get_record 需要 file_id 参数，而不是 message_id。
+        # 如果前面的步骤没能提取到本地路径，但消息中包含了 file_id，可以调用此 API。
+        
+        # 重新扫描一次消息段，尝试提取 file_id 或 file 字段（可能是文件名而非完整路径）
+        file_id = None
+        for seg in chain:
+            if isinstance(seg, Record):
+                file_id = getattr(seg, 'file_id', None) or getattr(seg, 'file', None)
+                if file_id:
+                    break
+        if reply_seg and not file_id:
+            for seg in reply_seg.chain:
+                if isinstance(seg, Record):
+                    file_id = getattr(seg, 'file_id', None) or getattr(seg, 'file', None)
+                    if file_id:
+                        break
+        
+        if file_id:
+            try:
+                # 调用 OneBot v11 的 get_record API
+                # 参数: file_id (字符串), out_format (可选，如 'mp3', 'wav', 'amr')
+                result = await event.bot.call_action('get_record', {
+                    'file_id': file_id,
+                    'out_format': 'amr'   # 或 'mp3'，取决于需求
+                })
+                # 返回值通常包含 'data' 字段，里面有 'file' 表示本地路径
+                if result and 'data' in result:
+                    record_path = result['data'].get('file')
+                    if record_path and os.path.exists(record_path):
+                        return ('local', record_path)
+            except Exception as e:
+                logger.error(f"[AiriVoice] get_record 调用失败: {e}")
+        
         return None
     
     async def _download_audio(self, url: str) -> Optional[bytes]:
