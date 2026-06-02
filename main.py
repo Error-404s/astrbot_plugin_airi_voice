@@ -784,7 +784,6 @@ class AiriVoice(Star):
         msg_id = self._get_reply_id(event)  # 获取引用消息的ID
         if msg_id is None:
             # 没有引用消息，尝试从当前消息中提取消息ID（语音消息自身）
-            # 部分事件中可能带有 message_id 属性
             msg_id = getattr(event, 'message_id', None)
         
         if msg_id:
@@ -807,12 +806,6 @@ class AiriVoice(Star):
                 logger.error(f"[AiriVoice] get_msg 失败: {e}")
         
         # ---------- 步骤4：最终手段 —— 调用 get_record API（NapCat 专用） ----------
-        # 需要获取语音的唯一标识 file_id。通常可以从消息段或 get_msg 结果中得到。
-        # 这里我们尝试从上述流程中已经得到的 msg_id 和可能的 file_id。
-        # 注意：get_record 需要 file_id 参数，而不是 message_id。
-        # 如果前面的步骤没能提取到本地路径，但消息中包含了 file_id，可以调用此 API。
-        
-        # 重新扫描一次消息段，尝试提取 file_id 或 file 字段（可能是文件名而非完整路径）
         file_id = None
         for seg in chain:
             if isinstance(seg, Record):
@@ -829,10 +822,10 @@ class AiriVoice(Star):
         if file_id:
             try:
                 # 调用 OneBot v11 的 get_record API
-                # 参数: file_id (字符串), out_format (可选，如 'mp3', 'wav', 'amr')
+                # 【修改点】：将 out_format 从 'amr' 改为 'mp3' 以提升音质
                 result = await event.bot.call_action('get_record', {
                     'file_id': file_id,
-                    'out_format': 'amr'   # 或 'mp3'，取决于需求
+                    'out_format': 'mp3'   # 使用 mp3 保证音质，如果需要无损可改为 'wav'
                 })
                 # 返回值通常包含 'data' 字段，里面有 'file' 表示本地路径
                 if result and 'data' in result:
@@ -844,10 +837,20 @@ class AiriVoice(Star):
         
         return None
     
-    async def _download_audio(self, url: str) -> Optional[bytes]:
+    async def _download_audio(self, url: str) -> Optional[Tuple[bytes, str]]:
+        """
+        下载音频文件。
+        【修改点】：修正了返回值类型提示，并添加了请求头以防止服务器拒绝或降级音质。
+        """
         try:
+            # 添加常见的浏览器请求头，防止腾讯媒体服务器拦截或返回低质量数据
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://qq.com"
+            }
             async with aiohttp.ClientSession() as client:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
+                response.raise_for_status() # 确保请求成功
                 data = await response.read()
                 content_type = (response.headers.get("Content-Type") or "").lower()
                 return data, content_type
