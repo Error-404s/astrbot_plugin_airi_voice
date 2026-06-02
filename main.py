@@ -4,6 +4,9 @@ import asyncio
 import difflib
 import json
 import re
+import logging
+import tempfile
+import wave
 import os
 import random
 import aiohttp
@@ -23,6 +26,13 @@ try:
     from astrbot.api.provider import ProviderRequest
 except Exception:
     ProviderRequest = Any
+# 尝试导入 pilk，用于解码 QQ 的 SILK v3 格式
+try:
+    import pilk
+    HAS_PILK = True
+except ImportError:
+    HAS_PILK = False
+    logging.warning("[AiriVoice] 未安装 pilk 库，将无法解码 QQ 原生 SILK v3 语音，建议执行: pip install pilk")
 
 ALLOWED_EXT = {".mp3", ".wav", ".ogg", ".silk", ".amr"}
 PAGE_SIZE = 15
@@ -721,6 +731,98 @@ class AiriVoice(Star):
                     pass
         return None
 
+    async def _convert_to_high_quality_mp3(self, input_path: str) -> Optional[str]:
+        """
+        将 AMR 或 SILK v3 格式的音频转换为高质量 MP3。
+        复刻 converter.sh 的逻辑：先尝试 SILK 解码，失败则按普通 AMR 处理。
+        返回: 转换后的 MP3 文件绝对路径，失败返回 None
+        """
+        if not os.path.exists(input_path):
+            return None
+
+        # 生成输出 MP3 路径（与原文件同目录，或放在临时目录）
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        output_dir = os.path.dirname(input_path) or tempfile.gettempdir()
+        output_mp3 = os.path.join(output_dir, f"{base_name}_hq.mp3")
+        
+        # 如果已经转换过，直接返回
+        if os.path.exists(output_mp3):
+            return output_mp3
+
+        is_silk = False
+        pcm_path = None
+
+        # ---------- 步骤 1：检测并解码 SILK v3 格式 ----------
+        if HAS_PILK:
+            try:
+                # 检查文件头是否为 SILK v3 (#!SILK_V3!)
+                with open(input_path, 'rb') as f:
+                    header = f.read(10)
+                
+                if b'SILK' in header or b'#!SILK' in header:
+                    is_silk = True
+                    pcm_path = input_path + ".pcm"
+                    
+                    # 使用 pilk 解码为 PCM
+                    # pilk.decode 返回 (pcm_data_length, sample_rate)
+                    pcm_len, sample_rate = pilk.decode(input_path, pcm_path)
+                    logger.debug(f"[AiriVoice] SILK 解码成功，采样率: {sample_rate}, 长度: {pcm_len}")
+            except Exception as e:
+                logger.warning(f"[AiriVoice] SILK 解码失败，将作为普通 AMR 处理: {e}")
+                is_silk = False
+
+        # ---------- 步骤 2：使用 FFmpeg 转换为 MP3 ----------
+        try:
+            if is_silk and pcm_path and os.path.exists(pcm_path):
+                # 对应 converter.sh 中的: ffmpeg -y -f s16le -ar 24000 -ac 1 -i input.pcm output.mp3
+                # 注意：pilk 解码出的默认采样率通常是 24000，如果 pilk 返回了其他采样率，请使用返回的 sample_rate
+                cmd = [
+                    'ffmpeg', '-y', 
+                    '-f', 's16le', 
+                    '-ar', '24000',  # 或 str(sample_rate)
+                    '-ac', '1', 
+                    '-i', pcm_path, 
+                    '-b:a', '128k',  # 提高比特率以保证音质
+                    output_mp3
+                ]
+            else:
+                # 对应 converter.sh 中的普通文件处理: ffmpeg -y -i input.amr output.mp3
+                cmd = [
+                    'ffmpeg', '-y', 
+                    '-i', input_path, 
+                    '-b:a', '128k', 
+                    output_mp3
+                ]
+
+            # 异步执行 ffmpeg
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0 and os.path.exists(output_mp3):
+                logger.info(f"[AiriVoice] 音频转换成功: {output_mp3}")
+                return output_mp3
+            else:
+                logger.error(f"[AiriVoice] FFmpeg 转换失败: {stderr.decode('utf-8', errors='ignore')}")
+                return None
+
+        except FileNotFoundError:
+            logger.error("[AiriVoice] 未找到 ffmpeg 命令，请确保系统已安装 ffmpeg 并配置环境变量。")
+            return None
+        except Exception as e:
+            logger.error(f"[AiriVoice] 音频转换过程发生异常: {e}")
+            return None
+        finally:
+            # 清理中间产生的 PCM 文件
+            if pcm_path and os.path.exists(pcm_path):
+                try:
+                    os.remove(pcm_path)
+                except OSError:
+                    pass
+
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
         chain = event.get_messages()
         url = None
@@ -755,30 +857,32 @@ class AiriVoice(Star):
         返回: ('local', 绝对路径) 或 ('url', http链接) 或 None
         """
         chain = event.get_messages()
+        raw_local_path = None
         
         # ---------- 步骤1：直接检查当前消息段 ----------
         for seg in chain:
             if isinstance(seg, Record):
-                # NapCat 可能直接提供 file 或 path 字段（本地路径）
                 local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
                 if local_path and os.path.exists(local_path):
-                    return ('local', local_path)
-                # 如果没有本地路径，尝试 URL
+                    raw_local_path = local_path
+                    break
                 url = getattr(seg, 'url', None)
                 if url and url.startswith('http'):
                     return ('url', url)
         
         # ---------- 步骤2：处理回复消息（用户引用的语音） ----------
-        reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
-        if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
-            for seg in reply_seg.chain:
-                if isinstance(seg, Record):
-                    local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
-                    if local_path and os.path.exists(local_path):
-                        return ('local', local_path)
-                    url = getattr(seg, 'url', None)
-                    if url and url.startswith('http'):
-                        return ('url', url)
+        if not raw_local_path:
+            reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
+            if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
+                for seg in reply_seg.chain:
+                    if isinstance(seg, Record):
+                        local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
+                        if local_path and os.path.exists(local_path):
+                            raw_local_path = local_path
+                            break
+                        url = getattr(seg, 'url', None)
+                        if url and url.startswith('http'):
+                            return ('url', url)
         
         # ---------- 步骤3：通过 get_msg API 获取消息详情 ----------
         msg_id = self._get_reply_id(event)  # 获取引用消息的ID
@@ -834,8 +938,21 @@ class AiriVoice(Star):
                         return ('local', record_path)
             except Exception as e:
                 logger.error(f"[AiriVoice] get_record 调用失败: {e}")
-        
+                # ---------- 最终处理：格式转换 ----------
+
+        if raw_local_path:
+            # 检查文件后缀，如果是 amr 或没有后缀，尝试转换为高质量 MP3
+            ext = os.path.splitext(raw_local_path)[1].lower()
+            if ext in ['.amr', '.silk', ''] or ext == '.pcm':
+                hq_mp3_path = await self._convert_to_high_quality_mp3(raw_local_path)
+                if hq_mp3_path:
+                    return ('local', hq_mp3_path)
+            
+            # 如果已经是 mp3/wav 或转换失败，返回原路径
+            return ('local', raw_local_path)
+            
         return None
+  
     
     async def _download_audio(self, url: str) -> Optional[Tuple[bytes, str]]:
         """
