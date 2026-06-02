@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import json
 import re
+import os
 import random
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
