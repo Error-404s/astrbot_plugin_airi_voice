@@ -7,6 +7,7 @@ import re
 import random
 import shutil
 import tempfile
+from urllib.parse import unquote
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pydantic import Field
@@ -723,18 +724,41 @@ class AiriVoice(Star):
         return None
 
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
-        # ...（保持你原来的实现不变）
+        # 返回“可读取音频源”，可为 http(s) URL、file:// URL 或本地路径。
         chain = event.get_messages()
         url = None
-        def extract_media_url(seg):
-            url_ = (getattr(seg, "url", None) or getattr(seg, "file", None) or getattr(seg, "path", None))
-            return url_ if url_ and str(url_).startswith("http") else None
+
+        def normalize_source(value: Any) -> Optional[str]:
+            if not value:
+                return None
+            s = str(value).strip()
+            if not s:
+                return None
+            if s.startswith("http://") or s.startswith("https://"):
+                return s
+            if s.startswith("file://"):
+                return s
+            try:
+                p = Path(s)
+                if p.exists() and p.is_file():
+                    return str(p)
+            except Exception:
+                pass
+            return None
+
+        def extract_media_source(seg: Any) -> Optional[str]:
+            # 优先 path/file，再回退 url，尽量拿到平台缓存原文件。
+            for candidate in (getattr(seg, "path", None), getattr(seg, "file", None), getattr(seg, "url", None)):
+                src = normalize_source(candidate)
+                if src:
+                    return src
+            return None
 
         reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
                 if isinstance(seg, Record):
-                    url = extract_media_url(seg)
+                    url = extract_media_source(seg)
                     if url: break
 
         if url is None and hasattr(event, 'bot'):
@@ -744,15 +768,50 @@ class AiriVoice(Star):
                     messages = raw.get("message", [])
                     for seg in messages:
                         if isinstance(seg, dict) and seg.get("type") == "record":
-                            if seg_url := seg.get("data", {}).get("url"):
-                                url = seg_url
+                            data = seg.get("data", {}) or {}
+                            for k in ("path", "file", "url"):
+                                src = normalize_source(data.get(k))
+                                if src:
+                                    url = src
+                                    break
+                            if url:
                                 break
                 except Exception as e:
                     logger.error(f"[AiriVoice] 获取引用消息失败：{e}")
+        if url:
+            logger.debug(f"[AiriVoice] 选中的音频源：{url}")
         return url
 
     async def _download_audio(self, url: str) -> Optional[bytes]:
+        def local_content_type(path: Path) -> str:
+            ext = path.suffix.lower()
+            if ext == ".silk":
+                return "audio/silk"
+            if ext == ".amr":
+                return "audio/amr"
+            if ext == ".wav":
+                return "audio/wav"
+            if ext == ".ogg":
+                return "audio/ogg"
+            if ext == ".mp3":
+                return "audio/mpeg"
+            return ""
+
         try:
+            if url.startswith("file://"):
+                raw_path = unquote(url[len("file://"):])
+                if re.match(r"^/[a-zA-Z]:/", raw_path):
+                    raw_path = raw_path[1:]
+                p = Path(raw_path)
+                if not p.exists() or not p.is_file():
+                    logger.error(f"[AiriVoice] 本地文件不存在：{p}")
+                    return None
+                return p.read_bytes(), local_content_type(p)
+
+            p = Path(url)
+            if p.exists() and p.is_file():
+                return p.read_bytes(), local_content_type(p)
+
             async with aiohttp.ClientSession() as client:
                 response = await client.get(url)
                 data = await response.read()
@@ -1552,6 +1611,9 @@ class AiriVoice(Star):
             yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
             return
         logger.debug(f"[AiriVoice] 获取到音频 URL: {audio_url}")
+        source_hint = "远程URL"
+        if audio_url.startswith("file://") or (Path(audio_url).exists() and Path(audio_url).is_file()):
+            source_hint = "本地缓存文件"
         res = await self._download_audio(audio_url)
         if not res:
             yield event.plain_result("❌ 音频下载失败，请稍后重试")
@@ -1586,7 +1648,7 @@ class AiriVoice(Star):
                 extra = f"\nℹ️ {detect_note}"
             yield event.plain_result(
                 f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{target_ext}\n"
-                f"💾 大小：{len(converted) / 1024:.2f} KB\n🎧 已使用 ffmpeg 转为无损 WAV{extra}"
+                f"💾 大小：{len(converted) / 1024:.2f} KB\n📡 来源：{source_hint}\n🎧 已使用 ffmpeg 转为无损 WAV{extra}"
             )
         except Exception as e:
             logger.error(f"[AiriVoice] 保存语音失败：{e}")
