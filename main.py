@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-import asyncio
+imimport asyncio
 import difflib
 import json
 import re
@@ -721,7 +721,6 @@ class AiriVoice(Star):
         return None
 
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
-        # ...（保持你原来的实现不变）
         chain = event.get_messages()
         url = None
         def extract_media_url(seg):
@@ -749,6 +748,56 @@ class AiriVoice(Star):
                     logger.error(f"[AiriVoice] 获取引用消息失败：{e}")
         return url
 
+    async def _get_audio_path_or_url(self, event: AstrMessageEvent) -> Optional[tuple[str, str]]:
+        """
+        返回 (类型, 路径/URL)
+        类型: 'local' 或 'url'
+        """
+        chain = event.get_messages()
+        
+        # 1. 直接从消息段找本地路径
+        for seg in chain:
+            if isinstance(seg, Record):
+                # 优先取本地 file/path
+                local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
+                if local_path and os.path.exists(local_path):
+                    return ('local', local_path)
+                # 其次才取 URL
+                url = getattr(seg, 'url', None)
+                if url and url.startswith('http'):
+                    return ('url', url)
+        
+        # 2. 如果是回复消息，深入 reply.chain
+        reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
+        if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
+            for seg in reply_seg.chain:
+                if isinstance(seg, Record):
+                    local_path = getattr(seg, 'file', None) or getattr(seg, 'path', None)
+                    if local_path and os.path.exists(local_path):
+                        return ('local', local_path)
+                    url = getattr(seg, 'url', None)
+                    if url and url.startswith('http'):
+                        return ('url', url)
+        
+        # 3. 回退到通过 get_msg API
+        if msg_id := self._get_reply_id(event):
+            try:
+                raw = await event.bot.get_msg(message_id=msg_id)
+                messages = raw.get("message", [])
+                for seg in messages:
+                    if isinstance(seg, dict) and seg.get("type") == "record":
+                        data = seg.get("data", {})
+                        # 检查是否有本地路径（不同协议命名不同）
+                        local_path = data.get("file") or data.get("path")
+                        if local_path and os.path.exists(local_path):
+                            return ('local', local_path)
+                        url = data.get("url")
+                        if url:
+                            return ('url', url)
+            except Exception as e:
+                logger.error(f"获取引用消息失败：{e}")
+        return None
+    
     async def _download_audio(self, url: str) -> Optional[bytes]:
         try:
             async with aiohttp.ClientSession() as client:
@@ -1419,54 +1468,94 @@ class AiriVoice(Star):
                 logger.error(f"[AiriVoice] 发送失败 '{keyword}': {e}")
                 yield event.plain_result("语音发送失败")
 
+
+
     @filter.command("voice.add")
     async def voice_add(self, event: AstrMessageEvent, name: str):
-        """引用一条语音消息并将其保存为新语音。"""
+        """引用一条语音消息并将其保存为新语音（保留原始音质）。"""
+        # 权限校验
         if not self._check_admin(event):
             yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
             return
+        
+        # 检查是否引用了消息
         if not self._get_reply_id(event):
             yield event.plain_result("❌ 请引用一条语音消息后再使用此命令")
             return
-        if not name or name.strip() == "":
+        
+        # 检查名称有效性
+        if not name or not name.strip():
             yield event.plain_result("❌ 请提供语音名称，例如：/voice.add 打卡啦摩托")
             return
         name = name.strip()
+        
+        # 检查重名
         if name in self.voice_map:
             yield event.plain_result(f"⚠️ 语音「{name}」已存在，如需覆盖请先删除旧语音")
             return
-        audio_url = await self._get_audio_url(event)
-        if not audio_url:
+        
+        # 获取语音源（本地路径或URL）
+        source_info = await self._get_audio_path_or_url(event)
+        if not source_info:
             yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
             return
-        logger.debug(f"[AiriVoice] 获取到音频 URL: {audio_url}")
-        res = await self._download_audio(audio_url)
-        if not res:
-            yield event.plain_result("❌ 音频下载失败，请稍后重试")
-            return
-        audio_data, content_type = res
-
-        # 优先根据响应的 Content-Type 判断扩展名，避免 URL 无扩展名或扩展不准确导致保存错误
-        ext = self._get_file_ext_from_url(audio_url)
-        if content_type:
-            if "silk" in content_type:
-                ext = ".silk"
-            elif "wav" in content_type or "wave" in content_type or "audio/x-wav" in content_type:
-                ext = ".wav"
-            elif "ogg" in content_type:
-                ext = ".ogg"
-            elif "amr" in content_type:
-                ext = ".amr"
-            elif "mpeg" in content_type or "mp3" in content_type:
-                ext = ".mp3"
-
-        file_path = self.user_added_dir / f"{name}{ext}"
+        
+        source_type, source_path = source_info
+        file_ext = None
+        audio_data = None
+        
         try:
-            with open(file_path, "wb") as f:
-                f.write(audio_data)
-            self.voice_map[name] = str(file_path)
+            if source_type == 'local':
+                # 直接复制本地文件，保留原始质量
+                file_ext = os.path.splitext(source_path)[1]
+                if not file_ext:
+                    file_ext = '.silk'  # 默认扩展名（QQ语音常见格式）
+                dest_path = self.user_added_dir / f"{name}{file_ext}"
+                shutil.copy2(source_path, dest_path)  # 复制文件，保留元数据
+                # 读取数据用于显示大小
+                with open(source_path, 'rb') as f:
+                    audio_data = f.read()
+                logger.info(f"[AiriVoice] 从本地复制语音: {source_path} -> {dest_path}")
+            else:  # url
+                # 下载网络音频（可能已降质，但作为兜底）
+                res = await self._download_audio(source_path)
+                if not res:
+                    yield event.plain_result("❌ 音频下载失败，请稍后重试")
+                    return
+                audio_data, content_type = res
+                
+                # 根据Content-Type或URL决定扩展名
+                file_ext = self._get_file_ext_from_url(source_path)
+                if content_type:
+                    if "silk" in content_type:
+                        file_ext = ".silk"
+                    elif "wav" in content_type or "wave" in content_type:
+                        file_ext = ".wav"
+                    elif "ogg" in content_type:
+                        file_ext = ".ogg"
+                    elif "amr" in content_type:
+                        file_ext = ".amr"
+                    elif "mpeg" in content_type or "mp3" in content_type:
+                        file_ext = ".mp3"
+                
+                dest_path = self.user_added_dir / f"{name}{file_ext}"
+                with open(dest_path, "wb") as f:
+                    f.write(audio_data)
+                logger.info(f"[AiriVoice] 下载网络语音: {source_path} -> {dest_path}")
+            
+            # 更新语音映射表
+            self.voice_map[name] = str(dest_path)
             self._update_sorted_keys()
-            yield event.plain_result(f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{ext}\n💾 大小：{len(audio_data) / 1024:.2f} KB")
+            
+            # 回复成功信息
+            size_kb = len(audio_data) / 1024 if audio_data else os.path.getsize(dest_path) / 1024
+            yield event.plain_result(
+                f"✅ 语音「{name}」添加成功！\n"
+                f"📁 文件：{name}{file_ext}\n"
+                f"💾 大小：{size_kb:.2f} KB\n"
+                f"🔊 音质：{'原始（本地复制）' if source_type == 'local' else '网络下载（可能已压缩）'}"
+            )
+            
         except Exception as e:
             logger.error(f"[AiriVoice] 保存语音失败：{e}")
             yield event.plain_result(f"❌ 保存语音失败：{str(e)}")
@@ -1523,36 +1612,7 @@ class AiriVoice(Star):
         if getattr(event, "__airi_voice_sent_by_tool__", False):
             logger.debug("[AiriVoice-auto] 本轮对话工具已发过语音，跳过自动追加")
             delattr(event, "__airi_voice_sent_by_tool__")  # 用完即放，避免状态残留
-            return
-
-        result = event.get_result()
-        if not result or not hasattr(result, "chain") or not result.chain:
-            return
-
-        text_parts = []
-        has_record_already = False
-        for seg in result.chain:
-            if isinstance(seg, Record):
-                has_record_already = True
-            elif hasattr(seg, "text"):
-                text_parts.append(str(getattr(seg, "text", "") or ""))
-            elif isinstance(seg, str):
-                text_parts.append(seg)
-
-        text = "".join(text_parts).strip()
-        if not text or has_record_already:
-            return  # 已包含语音或无文本 → 不处理
-
-        # 新增：过滤插件自己的命令回复，避免自我触发
-        if "可用语音" in text or "第" in text and "页" in text or "/voice.list" in text:
-            logger.debug("[AiriVoice-auto] 检测到 /voice.list 回复，跳过自动追加语音")
-            return
-
-        logger.debug(f"[AiriVoice-auto] bot 回复文本待检查: {text!r}")
-
-        for keyword in self.sorted_keys:
-            if keyword in text:
-                path = self.voice_map.get(keyword)
+d)
                 if path:
                     try:
                         result.chain.append(Record.fromFileSystem(path))
