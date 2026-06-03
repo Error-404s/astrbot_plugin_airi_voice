@@ -5,9 +5,6 @@ import difflib
 import json
 import re
 import random
-import shutil
-import tempfile
-from urllib.parse import unquote
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pydantic import Field
@@ -724,41 +721,18 @@ class AiriVoice(Star):
         return None
 
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
-        # 返回“可读取音频源”，可为 http(s) URL、file:// URL 或本地路径。
+        # ...（保持你原来的实现不变）
         chain = event.get_messages()
         url = None
-
-        def normalize_source(value: Any) -> Optional[str]:
-            if not value:
-                return None
-            s = str(value).strip()
-            if not s:
-                return None
-            if s.startswith("http://") or s.startswith("https://"):
-                return s
-            if s.startswith("file://"):
-                return s
-            try:
-                p = Path(s)
-                if p.exists() and p.is_file():
-                    return str(p)
-            except Exception:
-                pass
-            return None
-
-        def extract_media_source(seg: Any) -> Optional[str]:
-            # 优先 path/file，再回退 url，尽量拿到平台缓存原文件。
-            for candidate in (getattr(seg, "path", None), getattr(seg, "file", None), getattr(seg, "url", None)):
-                src = normalize_source(candidate)
-                if src:
-                    return src
-            return None
+        def extract_media_url(seg):
+            url_ = (getattr(seg, "url", None) or getattr(seg, "file", None) or getattr(seg, "path", None))
+            return url_ if url_ and str(url_).startswith("http") else None
 
         reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
                 if isinstance(seg, Record):
-                    url = extract_media_source(seg)
+                    url = extract_media_url(seg)
                     if url: break
 
         if url is None and hasattr(event, 'bot'):
@@ -768,50 +742,15 @@ class AiriVoice(Star):
                     messages = raw.get("message", [])
                     for seg in messages:
                         if isinstance(seg, dict) and seg.get("type") == "record":
-                            data = seg.get("data", {}) or {}
-                            for k in ("path", "file", "url"):
-                                src = normalize_source(data.get(k))
-                                if src:
-                                    url = src
-                                    break
-                            if url:
+                            if seg_url := seg.get("data", {}).get("url"):
+                                url = seg_url
                                 break
                 except Exception as e:
                     logger.error(f"[AiriVoice] 获取引用消息失败：{e}")
-        if url:
-            logger.debug(f"[AiriVoice] 选中的音频源：{url}")
         return url
 
     async def _download_audio(self, url: str) -> Optional[bytes]:
-        def local_content_type(path: Path) -> str:
-            ext = path.suffix.lower()
-            if ext == ".silk":
-                return "audio/silk"
-            if ext == ".amr":
-                return "audio/amr"
-            if ext == ".wav":
-                return "audio/wav"
-            if ext == ".ogg":
-                return "audio/ogg"
-            if ext == ".mp3":
-                return "audio/mpeg"
-            return ""
-
         try:
-            if url.startswith("file://"):
-                raw_path = unquote(url[len("file://"):])
-                if re.match(r"^/[a-zA-Z]:/", raw_path):
-                    raw_path = raw_path[1:]
-                p = Path(raw_path)
-                if not p.exists() or not p.is_file():
-                    logger.error(f"[AiriVoice] 本地文件不存在：{p}")
-                    return None
-                return p.read_bytes(), local_content_type(p)
-
-            p = Path(url)
-            if p.exists() and p.is_file():
-                return p.read_bytes(), local_content_type(p)
-
             async with aiohttp.ClientSession() as client:
                 response = await client.get(url)
                 data = await response.read()
@@ -820,116 +759,6 @@ class AiriVoice(Star):
         except Exception as e:
             logger.error(f"[AiriVoice] 下载音频失败：{e}")
             return None
-
-    def _guess_audio_ext(self, url: str, content_type: str = "") -> str:
-        url_lower = url.lower()
-        content_type_lower = (content_type or "").lower()
-        if "silk" in content_type_lower or ".silk" in url_lower:
-            return ".silk"
-        if "wav" in content_type_lower or "wave" in content_type_lower or ".wav" in url_lower:
-            return ".wav"
-        if "ogg" in content_type_lower or ".ogg" in url_lower:
-            return ".ogg"
-        if "amr" in content_type_lower or ".amr" in url_lower:
-            return ".amr"
-        if "mpeg" in content_type_lower or "mp3" in content_type_lower or ".mp3" in url_lower:
-            return ".mp3"
-        return ".mp3"
-
-    def _detect_audio_kind(self, audio_data: bytes, guessed_ext: str) -> tuple[str, bytes, str]:
-        # QQ 语音有时会在 silk 头前带 1 字节前缀（例如 0x02），这里自动剥离后再解码。
-        silk_magic = b"#!SILK_V3"
-        idx = audio_data.find(silk_magic)
-        if idx >= 0:
-            note = ""
-            normalized = audio_data[idx:]
-            if idx > 0:
-                note = f"检测到 silk 头前缀 {idx} 字节，已自动剥离"
-            return ".silk", normalized, note
-
-        if audio_data.startswith(b"#!AMR\n") or audio_data.startswith(b"#!AMR-WB\n"):
-            return ".amr", audio_data, ""
-
-        return guessed_ext, audio_data, ""
-
-    def _find_silk_decoder(self) -> Optional[Path]:
-        candidates = []
-        configured = self.config.get("silk_decoder_path")
-        if isinstance(configured, str) and configured.strip():
-            candidates.append(Path(configured.strip()))
-        for cmd in ("decoder", "decoder.exe"):
-            p = shutil.which(cmd)
-            if p:
-                candidates.append(Path(p))
-        candidates.extend([
-            self.plugin_dir / "silk" / "decoder",
-            self.plugin_dir / "silk" / "decoder.exe",
-            self.plugin_dir / "silk_v3_decoder" / "decoder",
-            self.plugin_dir / "silk_v3_decoder" / "decoder.exe",
-            self.data_dir / "silk" / "decoder",
-            self.data_dir / "silk" / "decoder.exe",
-        ])
-        for candidate in candidates:
-            try:
-                if candidate.exists() and candidate.is_file():
-                    return candidate
-            except Exception:
-                continue
-        return None
-
-    async def _run_command(self, *args: str) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        return proc.returncode, stderr.decode("utf-8", errors="ignore")
-
-    async def _convert_audio_for_add(self, audio_data: bytes, source_ext: str) -> tuple[Optional[bytes], str, Optional[str]]:
-        with tempfile.TemporaryDirectory(prefix="airi_voice_") as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            source_path = tmpdir_path / f"source{source_ext or '.bin'}"
-            source_path.write_bytes(audio_data)
-
-            wav_path = tmpdir_path / "output.wav"
-            if source_ext == ".silk":
-                decoder = self._find_silk_decoder()
-                if decoder is None:
-                    return None, source_ext, "未找到 silk decoder，可将 silk/decoder 放到插件目录或在配置中设置 silk_decoder_path"
-
-                pcm_path = tmpdir_path / "output.pcm"
-                rc, err = await self._run_command(str(decoder), str(source_path), str(pcm_path))
-                if rc != 0 or not pcm_path.exists():
-                    return None, source_ext, f"silk 解码失败：{err.strip() or 'unknown error'}"
-
-                rc, err = await self._run_command(
-                    "ffmpeg",
-                    "-y",
-                    "-f", "s16le",
-                    "-ar", "24000",
-                    "-ac", "1",
-                    "-i", str(pcm_path),
-                    "-c:a", "pcm_s16le",
-                    str(wav_path),
-                )
-                if rc != 0 or not wav_path.exists():
-                    return None, source_ext, f"ffmpeg 转码失败：{err.strip() or 'unknown error'}"
-            else:
-                rc, err = await self._run_command(
-                    "ffmpeg",
-                    "-y",
-                    "-i", str(source_path),
-                    "-vn",
-                    "-sn",
-                    "-dn",
-                    "-c:a", "pcm_s16le",
-                    str(wav_path),
-                )
-                if rc != 0 or not wav_path.exists():
-                    return None, source_ext, f"ffmpeg 转码失败：{err.strip() or 'unknown error'}"
-
-            return wav_path.read_bytes(), ".wav", None
 
     def _get_file_ext_from_url(self, url: str) -> str:
         url_lower = url.lower()
@@ -1611,45 +1440,33 @@ class AiriVoice(Star):
             yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
             return
         logger.debug(f"[AiriVoice] 获取到音频 URL: {audio_url}")
-        source_hint = "远程URL"
-        if audio_url.startswith("file://") or (Path(audio_url).exists() and Path(audio_url).is_file()):
-            source_hint = "本地缓存文件"
         res = await self._download_audio(audio_url)
         if not res:
             yield event.plain_result("❌ 音频下载失败，请稍后重试")
             return
         audio_data, content_type = res
 
-        guessed_ext = self._guess_audio_ext(audio_url, content_type)
-        source_ext, normalized_data, detect_note = self._detect_audio_kind(audio_data, guessed_ext)
-        if detect_note:
-            logger.info(f"[AiriVoice] {detect_note}")
+        # 优先根据响应的 Content-Type 判断扩展名，避免 URL 无扩展名或扩展不准确导致保存错误
+        ext = self._get_file_ext_from_url(audio_url)
+        if content_type:
+            if "silk" in content_type:
+                ext = ".silk"
+            elif "wav" in content_type or "wave" in content_type or "audio/x-wav" in content_type:
+                ext = ".wav"
+            elif "ogg" in content_type:
+                ext = ".ogg"
+            elif "amr" in content_type:
+                ext = ".amr"
+            elif "mpeg" in content_type or "mp3" in content_type:
+                ext = ".mp3"
 
-        converted, target_ext, convert_err = await self._convert_audio_for_add(normalized_data, source_ext)
-        if converted is None:
-            logger.warning(f"[AiriVoice] 语音转码失败：{convert_err}")
-            if source_ext == ".silk":
-                yield event.plain_result(
-                    "❌ 语音添加失败：检测到 Silk 语音但无法完成解码转码。\n"
-                    "请在插件目录放置 `silk/decoder(.exe)`，或在配置中填写 `silk_decoder_path` 后重试。"
-                )
-                return
-            yield event.plain_result(f"❌ 语音转码失败：{convert_err}")
-            return
-
-        file_path = self.user_added_dir / f"{name}{target_ext}"
+        file_path = self.user_added_dir / f"{name}{ext}"
         try:
             with open(file_path, "wb") as f:
-                f.write(converted)
+                f.write(audio_data)
             self.voice_map[name] = str(file_path)
             self._update_sorted_keys()
-            extra = ""
-            if detect_note:
-                extra = f"\nℹ️ {detect_note}"
-            yield event.plain_result(
-                f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{target_ext}\n"
-                f"💾 大小：{len(converted) / 1024:.2f} KB\n📡 来源：{source_hint}\n🎧 已使用 ffmpeg 转为无损 WAV{extra}"
-            )
+            yield event.plain_result(f"✅ 语音「{name}」添加成功！\n📁 文件：{name}{ext}\n💾 大小：{len(audio_data) / 1024:.2f} KB")
         except Exception as e:
             logger.error(f"[AiriVoice] 保存语音失败：{e}")
             yield event.plain_result(f"❌ 保存语音失败：{str(e)}")
