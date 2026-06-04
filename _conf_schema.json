@@ -43,12 +43,6 @@
     "default": false,
     "hint": "默认关闭：LLM 模式建议仅由 LLM 工具决定是否发语音，避免文本命中关键词导致非预期追加"
   },
-  "silk_decoder_path": {
-    "description": "silk 解码器路径",
-    "type": "text",
-    "default": "",
-    "hint": "当 /voice.add 引用的是 QQ silk 语音时，先用该 decoder 输出 pcm，再交给 ffmpeg 转为 wav。可留空；插件会尝试自动查找 plugin_dir/silk/decoder"
-  },
   "llm_select_mode": {
     "description": "LLM 语音选择模式",
     "type": "string",

@@ -6,6 +6,8 @@ import json
 import re
 import random
 import aiohttp
+import base64
+from urllib.parse import unquote
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from pydantic import Field
 from pydantic.dataclasses import dataclass
@@ -721,43 +723,74 @@ class AiriVoice(Star):
         return None
 
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
-        # ...（保持你原来的实现不变）
+        """
+        提取语音消息的 file (优先) 或 url。
+        OneBot V11 中语音通常只有 file 字段 (base64 或本地路径)，没有 url。
+        """
         chain = event.get_messages()
-        url = None
-        def extract_media_url(seg):
-            url_ = (getattr(seg, "url", None) or getattr(seg, "file", None) or getattr(seg, "path", None))
-            return url_ if url_ and str(url_).startswith("http") else None
-
+        
+        # 1. 先尝试从 Reply 引用的消息中找
         reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
                 if isinstance(seg, Record):
-                    url = extract_media_url(seg)
-                    if url: break
+                    # 优先返回 file，如果没有再返回 url
+                    if getattr(seg, "file", None):
+                        return seg.file
+                    elif getattr(seg, "url", None):
+                        return seg.url
 
-        if url is None and hasattr(event, 'bot'):
+        # 2. 如果引用里没找到，尝试从事件自带的消息里找 (防止有些协议端直接发在根消息里)
+        if hasattr(event, 'bot'):
             if msg_id := self._get_reply_id(event):
                 try:
                     raw = await event.bot.get_msg(message_id=msg_id)
                     messages = raw.get("message", [])
                     for seg in messages:
                         if isinstance(seg, dict) and seg.get("type") == "record":
-                            if seg_url := seg.get("data", {}).get("url"):
-                                url = seg_url
-                                break
+                            data = seg.get("data", {})
+                            # 优先返回 file
+                            if data.get("file"):
+                                return data["file"]
+                            elif data.get("url"):
+                                return data["url"]
                 except Exception as e:
-                    logger.error(f"[AiriVoice] 获取引用消息失败：{e}")
-        return url
+                    logger.error(f"[AiriVoice] 通过 bot.get_msg 获取引用消息失败：{e}")
 
-    async def _download_audio(self, url: str) -> Optional[bytes]:
+        return None
+
+    async def _download_audio(self, file_data: str) -> Optional[bytes]:
+        """
+        处理语音数据。
+        如果是 base64:// 开头，解码返回。
+        如果是文件路径 (file:/// 或普通路径)，直接读取本地文件。
+        """
         try:
-            async with aiohttp.ClientSession() as client:
-                response = await client.get(url)
-                data = await response.read()
-                content_type = (response.headers.get("Content-Type") or "").lower()
-                return data, content_type
+            # 处理 base64 数据
+            if file_data.startswith("base64://"):
+                base64_str = file_data[9:] # 去掉前缀
+                return base64.b64decode(base64_str), "audio/amr" # 默认 AMR 格式
+            
+            # 处理本地文件路径
+            elif file_data.startswith("file:///"):
+                # 处理 URL 编码的路径
+                file_path = unquote(file_data[7:])
+            else:
+                # 直接就是文件名 (如: 123.silk) 或者绝对路径
+                # 尝试直接拼接路径，或者直接作为绝对路径处理
+                file_path = file_data
+            
+            # 尝试读取本地文件
+            path_obj = Path(file_path)
+            if path_obj.is_file():
+                with open(path_obj, "rb") as f:
+                    return f.read(), f"audio/{path_obj.suffix[1:]}"
+            else:
+                logger.error(f"[AiriVoice] 本地文件不存在: {file_path}")
+                return None
+                
         except Exception as e:
-            logger.error(f"[AiriVoice] 下载音频失败：{e}")
+            logger.error(f"[AiriVoice] 处理音频数据失败：{e}")
             return None
 
     def _get_file_ext_from_url(self, url: str) -> str:
@@ -1422,44 +1455,70 @@ class AiriVoice(Star):
     @filter.command("voice.add")
     async def voice_add(self, event: AstrMessageEvent, name: str):
         """引用一条语音消息并将其保存为新语音。"""
+        
         if not self._check_admin(event):
             yield event.plain_result("❌ 权限不足：此命令仅限管理员使用")
             return
+            
         if not self._get_reply_id(event):
             yield event.plain_result("❌ 请引用一条语音消息后再使用此命令")
             return
+            
         if not name or name.strip() == "":
             yield event.plain_result("❌ 请提供语音名称，例如：/voice.add 打卡啦摩托")
             return
+            
         name = name.strip()
         if name in self.voice_map:
             yield event.plain_result(f"⚠️ 语音「{name}」已存在，如需覆盖请先删除旧语音")
             return
-        audio_url = await self._get_audio_url(event)
-        if not audio_url:
-            yield event.plain_result("❌ 未能从引用的消息中提取到音频，请确保引用的是语音消息")
+
+        # 1. 获取 file 标识 (base64 或 路径)
+        file_identifier = await self._get_audio_url(event)
+        if not file_identifier:
+            yield event.plain_result("❌ 未能从引用的消息中提取到音频数据，请确保引用的是语音消息")
             return
-        logger.debug(f"[AiriVoice] 获取到音频 URL: {audio_url}")
-        res = await self._download_audio(audio_url)
+
+        logger.debug(f"[AiriVoice] 获取到音频标识: {file_identifier[:30]}...") # 打印前30位防止刷屏
+
+        # 2. 处理并获取音频二进制数据
+        res = await self._download_audio(file_identifier)
         if not res:
-            yield event.plain_result("❌ 音频下载失败，请稍后重试")
+            yield event.plain_result("❌ 音频处理失败 (文件不存在或格式错误)")
             return
+            
         audio_data, content_type = res
 
-        # 优先根据响应的 Content-Type 判断扩展名，避免 URL 无扩展名或扩展不准确导致保存错误
-        ext = self._get_file_ext_from_url(audio_url)
+        # 3. 确定扩展名
+        # 如果是 base64，通常无法直接判断，可以根据 content_type 或默认 .amr
+        # 如果是文件路径，直接用后缀
+        ext = ".amr" # 默认后缀
+        if hasattr(self, 'user_added_dir'): # 确保目录存在
+            pass
+        else:
+            yield event.plain_result("❌ 插件初始化异常，缺少数据目录")
+            return
+            
+        # 尝试从 content_type 或 file_identifier 中猜测后缀
         if content_type:
-            if "silk" in content_type:
+            if "silk" in content_type or "audio/silk" in content_type:
                 ext = ".silk"
-            elif "wav" in content_type or "wave" in content_type or "audio/x-wav" in content_type:
+            elif "wav" in content_type or "wave" in content_type:
                 ext = ".wav"
             elif "ogg" in content_type:
                 ext = ".ogg"
-            elif "amr" in content_type:
-                ext = ".amr"
-            elif "mpeg" in content_type or "mp3" in content_type:
+            elif "mp3" in content_type:
                 ext = ".mp3"
+        elif file_identifier.startswith("base64://"):
+            # QQ 语音通常是 amr 或 silk
+            ext = ".amr"
+        else:
+            # 从路径猜测
+            path_ext = Path(file_identifier).suffix.lower()
+            if path_ext in [".amr", ".silk", ".wav", ".mp3", ".ogg"]:
+                ext = path_ext
 
+        # 4. 保存文件
         file_path = self.user_added_dir / f"{name}{ext}"
         try:
             with open(file_path, "wb") as f:
