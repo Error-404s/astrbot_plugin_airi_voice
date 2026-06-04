@@ -725,7 +725,7 @@ class AiriVoice(Star):
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
         """
         提取语音消息的 file (优先) 或 url。
-        OneBot V11 中语音通常只有 file 字段 (base64 或本地路径)，没有 url。
+        尝试将相对路径或文件名转换为绝对路径。
         """
         chain = event.get_messages()
         
@@ -734,13 +734,19 @@ class AiriVoice(Star):
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
                 if isinstance(seg, Record):
-                    # 优先返回 file，如果没有再返回 url
+                    # 优先返回 file
                     if getattr(seg, "file", None):
-                        return seg.file
-                    elif getattr(seg, "url", None):
-                        return seg.url
+                        file_path = seg.file
+                        # 如果是 base64 或 http 开头，直接返回
+                        if file_path.startswith("base64://") or file_path.startswith("http"):
+                            return file_path
+                        # 否则尝试拼接绝对路径 (常见于 NT 内核 QQ)
+                        # 这里假设文件在 nt_data/Ptt 目录下，如果这里报错，可能需要根据你的日志路径微调
+                        # 根据你之前的日志，文件通常在 .../nt_data/Ptt/.../Ori/ 下
+                        # 但我们这里先尝试直接用文件名找，如果找不到再由 _download_audio 处理
+                        return file_path
 
-        # 2. 如果引用里没找到，尝试从事件自带的消息里找 (防止有些协议端直接发在根消息里)
+        # 2. 如果引用里没找到，尝试通过 get_msg 接口获取
         if hasattr(event, 'bot'):
             if msg_id := self._get_reply_id(event):
                 try:
@@ -749,11 +755,12 @@ class AiriVoice(Star):
                     for seg in messages:
                         if isinstance(seg, dict) and seg.get("type") == "record":
                             data = seg.get("data", {})
-                            # 优先返回 file
-                            if data.get("file"):
-                                return data["file"]
-                            elif data.get("url"):
-                                return data["url"]
+                            file_path = data.get("file")
+                            if file_path:
+                                # 同样处理路径
+                                if file_path.startswith("base64://") or file_path.startswith("http"):
+                                    return file_path
+                                return file_path
                 except Exception as e:
                     logger.error(f"[AiriVoice] 通过 bot.get_msg 获取引用消息失败：{e}")
 
@@ -762,31 +769,61 @@ class AiriVoice(Star):
     async def _download_audio(self, file_data: str) -> Optional[bytes]:
         """
         处理语音数据。
-        如果是 base64:// 开头，解码返回。
-        如果是文件路径 (file:/// 或普通路径)，直接读取本地文件。
+        1. 如果是 base64:// 开头，解码返回。
+        2. 如果是文件路径，直接读取。
+        3. 如果只是文件名（如 xxx.amr），尝试在默认语音目录中搜索。
         """
         try:
             # 处理 base64 数据
             if file_data.startswith("base64://"):
                 base64_str = file_data[9:] # 去掉前缀
-                return base64.b64decode(base64_str), "audio/amr" # 默认 AMR 格式
+                return base64.b64decode(base64_str), "audio/amr"
             
-            # 处理本地文件路径
+            # 处理 URL 编码的文件路径 file:///
             elif file_data.startswith("file:///"):
-                # 处理 URL 编码的路径
-                file_path = unquote(file_data[7:])
+                decoded_path = unquote(file_data[7:])
+                path_obj = Path(decoded_path)
+                if path_obj.is_file():
+                    with open(path_obj, "rb") as f:
+                        content = f.read()
+                    ext = path_obj.suffix.lower()
+                    return content, f"audio/{ext[1:]}" if ext else "audio/octet-stream"
+
+            # 处理纯文件名 (例如: 0b5bd971a0556683058e2e1dbc55bccb.amr)
+            # 这通常意味着是相对路径或 QQ 的缓存文件名
             else:
-                # 直接就是文件名 (如: 123.silk) 或者绝对路径
-                # 尝试直接拼接路径，或者直接作为绝对路径处理
-                file_path = file_data
-            
-            # 尝试读取本地文件
-            path_obj = Path(file_path)
-            if path_obj.is_file():
-                with open(path_obj, "rb") as f:
-                    return f.read(), f"audio/{path_obj.suffix[1:]}"
-            else:
-                logger.error(f"[AiriVoice] 本地文件不存在: {file_path}")
+                # 1. 先尝试直接以当前工作目录找 (有时候能直接找到)
+                current_dir_file = Path(file_data)
+                if current_dir_file.is_file():
+                    with open(current_dir_file, "rb") as f:
+                        content = f.read()
+                    ext = current_dir_file.suffix.lower()
+                    return content, f"audio/{ext[1:]}"
+                
+                # 2. 如果当前目录找不到，尝试在用户家目录下的常见 QQ 语音缓存路径中搜索
+                # 根据你之前的日志，路径通常是 .../nt_data/Ptt/.../Ori/
+                # 这里做一个简单的搜索逻辑：遍历 voices 目录及其子目录（或者你保存语音的特定目录）
+                # 为了效率，这里假设你把语音都保存在插件的 voices 目录下，或者在 user_added_dir 下
+                # 如果没找到，返回错误
+                
+                # 尝试在插件的 voices 目录下找
+                default_voice_file = self.voice_dir / file_data
+                if default_voice_file.is_file():
+                    with open(default_voice_file, "rb") as f:
+                        content = f.read()
+                    ext = default_voice_file.suffix.lower()
+                    return content, f"audio/{ext[1:]}"
+                
+                # 尝试在 user_added 目录下找
+                user_added_file = self.user_added_dir / file_data
+                if user_added_file.is_file():
+                    with open(user_added_file, "rb") as f:
+                        content = f.read()
+                    ext = user_added_file.suffix.lower()
+                    return content, f"audio/{ext[1:]}"
+                
+                # 如果都找不到，报错
+                logger.error(f"[AiriVoice] 无法找到语音文件: {file_data} (未在 voices 或 user_added 目录中找到)")
                 return None
                 
         except Exception as e:
