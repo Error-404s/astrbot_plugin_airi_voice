@@ -724,29 +724,21 @@ class AiriVoice(Star):
 
     async def _get_audio_url(self, event: AstrMessageEvent) -> Optional[str]:
         """
-        提取语音消息的 file (优先) 或 url。
-        尝试将相对路径或文件名转换为绝对路径。
+        【核心修改】直接提取语音消息的本地 path。
+        不再使用 url 或 file 字段，直接使用 path 可以绕过下载环节。
         """
         chain = event.get_messages()
         
-        # 1. 先尝试从 Reply 引用的消息中找
+        # 1. 优先从引用消息中提取
         reply_seg = next((seg for seg in chain if isinstance(seg, Reply)), None)
         if reply_seg and hasattr(reply_seg, 'chain') and reply_seg.chain:
             for seg in reply_seg.chain:
                 if isinstance(seg, Record):
-                    # 优先返回 file
-                    if getattr(seg, "file", None):
-                        file_path = seg.file
-                        # 如果是 base64 或 http 开头，直接返回
-                        if file_path.startswith("base64://") or file_path.startswith("http"):
-                            return file_path
-                        # 否则尝试拼接绝对路径 (常见于 NT 内核 QQ)
-                        # 这里假设文件在 nt_data/Ptt 目录下，如果这里报错，可能需要根据你的日志路径微调
-                        # 根据你之前的日志，文件通常在 .../nt_data/Ptt/.../Ori/ 下
-                        # 但我们这里先尝试直接用文件名找，如果找不到再由 _download_audio 处理
-                        return file_path
+                    # 直接返回本地 path
+                    if getattr(seg, "path", None):
+                        return seg.path
 
-        # 2. 如果引用里没找到，尝试通过 get_msg 接口获取
+        # 2. 如果引用里没找到，尝试通过 bot.get_msg 接口获取 (备用方案)
         if hasattr(event, 'bot'):
             if msg_id := self._get_reply_id(event):
                 try:
@@ -755,79 +747,32 @@ class AiriVoice(Star):
                     for seg in messages:
                         if isinstance(seg, dict) and seg.get("type") == "record":
                             data = seg.get("data", {})
-                            file_path = data.get("file")
-                            if file_path:
-                                # 同样处理路径
-                                if file_path.startswith("base64://") or file_path.startswith("http"):
-                                    return file_path
-                                return file_path
+                            path = data.get("path")
+                            if path:
+                                return path
                 except Exception as e:
                     logger.error(f"[AiriVoice] 通过 bot.get_msg 获取引用消息失败：{e}")
 
         return None
 
-    async def _download_audio(self, file_data: str) -> Optional[bytes]:
+    async def _download_audio(self, local_path: str) -> Optional[bytes]:
         """
-        处理语音数据。
-        1. 如果是 base64:// 开头，解码返回。
-        2. 如果是文件路径，直接读取。
-        3. 如果只是文件名（如 xxx.amr），尝试在默认语音目录中搜索。
+        【核心修改】因为传入的是本地 path，直接读取文件。
         """
         try:
-            # 处理 base64 数据
-            if file_data.startswith("base64://"):
-                base64_str = file_data[9:] # 去掉前缀
-                return base64.b64decode(base64_str), "audio/amr"
-            
-            # 处理 URL 编码的文件路径 file:///
-            elif file_data.startswith("file:///"):
-                decoded_path = unquote(file_data[7:])
-                path_obj = Path(decoded_path)
-                if path_obj.is_file():
-                    with open(path_obj, "rb") as f:
-                        content = f.read()
-                    ext = path_obj.suffix.lower()
-                    return content, f"audio/{ext[1:]}" if ext else "audio/octet-stream"
-
-            # 处理纯文件名 (例如: 0b5bd971a0556683058e2e1dbc55bccb.amr)
-            # 这通常意味着是相对路径或 QQ 的缓存文件名
+            path_obj = Path(local_path)
+            if path_obj.is_file():
+                with open(path_obj, "rb") as f:
+                    content = f.read()
+                # 获取文件后缀用于判断类型
+                ext = path_obj.suffix.lower()
+                content_type = f"audio/{ext[1:]}" if ext else "audio/octet-stream"
+                return content, content_type
             else:
-                # 1. 先尝试直接以当前工作目录找 (有时候能直接找到)
-                current_dir_file = Path(file_data)
-                if current_dir_file.is_file():
-                    with open(current_dir_file, "rb") as f:
-                        content = f.read()
-                    ext = current_dir_file.suffix.lower()
-                    return content, f"audio/{ext[1:]}"
-                
-                # 2. 如果当前目录找不到，尝试在用户家目录下的常见 QQ 语音缓存路径中搜索
-                # 根据你之前的日志，路径通常是 .../nt_data/Ptt/.../Ori/
-                # 这里做一个简单的搜索逻辑：遍历 voices 目录及其子目录（或者你保存语音的特定目录）
-                # 为了效率，这里假设你把语音都保存在插件的 voices 目录下，或者在 user_added_dir 下
-                # 如果没找到，返回错误
-                
-                # 尝试在插件的 voices 目录下找
-                default_voice_file = self.voice_dir / file_data
-                if default_voice_file.is_file():
-                    with open(default_voice_file, "rb") as f:
-                        content = f.read()
-                    ext = default_voice_file.suffix.lower()
-                    return content, f"audio/{ext[1:]}"
-                
-                # 尝试在 user_added 目录下找
-                user_added_file = self.user_added_dir / file_data
-                if user_added_file.is_file():
-                    with open(user_added_file, "rb") as f:
-                        content = f.read()
-                    ext = user_added_file.suffix.lower()
-                    return content, f"audio/{ext[1:]}"
-                
-                # 如果都找不到，报错
-                logger.error(f"[AiriVoice] 无法找到语音文件: {file_data} (未在 voices 或 user_added 目录中找到)")
+                logger.error(f"[AiriVoice] 本地文件不存在: {local_path}")
                 return None
-                
         except Exception as e:
-            logger.error(f"[AiriVoice] 处理音频数据失败：{e}")
+            logger.error(f"[AiriVoice] 读取本地音频文件失败：{e}")
             return None
 
     def _get_file_ext_from_url(self, url: str) -> str:
@@ -1510,50 +1455,34 @@ class AiriVoice(Star):
             yield event.plain_result(f"⚠️ 语音「{name}」已存在，如需覆盖请先删除旧语音")
             return
 
-        # 1. 获取 file 标识 (base64 或 路径)
-        file_identifier = await self._get_audio_url(event)
-        if not file_identifier:
-            yield event.plain_result("❌ 未能从引用的消息中提取到音频数据，请确保引用的是语音消息")
+        # 1. 获取本地 Path (由修改后的 _get_audio_url 提供)
+        local_path = await self._get_audio_url(event)
+        if not local_path:
+            yield event.plain_result("❌ 未能从引用的消息中提取到音频路径，请确保引用的是语音消息")
             return
 
-        logger.debug(f"[AiriVoice] 获取到音频标识: {file_identifier[:30]}...") # 打印前30位防止刷屏
+        logger.debug(f"[AiriVoice] 获取到本地音频路径: {local_path}")
 
-        # 2. 处理并获取音频二进制数据
-        res = await self._download_audio(file_identifier)
+        # 2. 读取本地文件 (由修改后的 _download_audio 处理)
+        res = await self._download_audio(local_path)
         if not res:
-            yield event.plain_result("❌ 音频处理失败 (文件不存在或格式错误)")
+            yield event.plain_result("❌ 音频读取失败 (文件不存在或被移动)")
             return
             
         audio_data, content_type = res
 
-        # 3. 确定扩展名
-        # 如果是 base64，通常无法直接判断，可以根据 content_type 或默认 .amr
-        # 如果是文件路径，直接用后缀
-        ext = ".amr" # 默认后缀
-        if hasattr(self, 'user_added_dir'): # 确保目录存在
-            pass
-        else:
-            yield event.plain_result("❌ 插件初始化异常，缺少数据目录")
-            return
-            
-        # 尝试从 content_type 或 file_identifier 中猜测后缀
-        if content_type:
-            if "silk" in content_type or "audio/silk" in content_type:
-                ext = ".silk"
-            elif "wav" in content_type or "wave" in content_type:
-                ext = ".wav"
-            elif "ogg" in content_type:
-                ext = ".ogg"
-            elif "mp3" in content_type:
-                ext = ".mp3"
-        elif file_identifier.startswith("base64://"):
-            # QQ 语音通常是 amr 或 silk
-            ext = ".amr"
-        else:
-            # 从路径猜测
-            path_ext = Path(file_identifier).suffix.lower()
-            if path_ext in [".amr", ".silk", ".wav", ".mp3", ".ogg"]:
-                ext = path_ext
+        # 3. 确定扩展名 (优先使用原文件后缀，如果没读取到则根据 content_type 判断)
+        ext = Path(local_path).suffix
+        if not ext:
+            # 备用判断逻辑
+            if content_type:
+                if "silk" in content_type: ext = ".silk"
+                elif "wav" in content_type: ext = ".wav"
+                elif "ogg" in content_type: ext = ".ogg"
+                elif "amr" in content_type: ext = ".amr"
+                elif "mp3" in content_type: ext = ".mp3"
+            else:
+                ext = ".amr" # 最后的兜底
 
         # 4. 保存文件
         file_path = self.user_added_dir / f"{name}{ext}"
