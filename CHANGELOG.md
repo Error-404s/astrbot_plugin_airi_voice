@@ -9,7 +9,7 @@
 ### 🐛 bug修复
 
 -**针对voice.add的修复** 
-  - 日前，voice.add命令添加的语音是极度失真压缩的，我一直没有发现这个问题，感谢Whereis-Alice的issue。
+  - 日前，voice.add命令添加的语音是极度失真压缩的，我一直没有发现这个问题，感谢[Whereis-Alice](https://github.com/Whereis-Alice)的issue。
   - 通过url获取的音频已经是被压缩的了，本插件直接获取了本地缓存ori的ptt中音频，并加以处理，使add的语音保持原音频质量
   
 
