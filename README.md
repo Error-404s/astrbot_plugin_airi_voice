@@ -37,6 +37,9 @@
    - 音频蛋没能量，可以直接F12爬取音频
 
    https://www.tosound.com/
+- 日语tts生成（效果一般般）
+  
+  https://airvoz.com/zh/text-to-speech/japanese
 
 - 日语素材（⭐推荐） 需要魔法
 
